@@ -8,8 +8,11 @@ It is a portfolio project that mirrors a common integration job: platforms such
 as Shopify push webhooks, and the receiving side has to be fast, safe against
 forgery, tolerant of duplicate and out-of-order deliveries, and observable.
 
-> **Status: early development.** The repository currently contains the project
-> tooling and the design decisions. The service itself is not implemented yet.
+> **Status: early development.** Implemented so far: signature verification,
+> idempotent ingestion of Shopify webhooks into Postgres, a health endpoint,
+> migrations, tests against a real Postgres, and a Docker image. Not yet
+> implemented: the worker with retries and dead letters, the read-only API,
+> rate limiting, and deployment.
 
 ## What it will do
 
@@ -44,10 +47,20 @@ Requires Node 24 and pnpm 11 (see `mise.toml`).
 
 ```bash
 pnpm install
+pnpm db:up          # start local Postgres (needs Docker)
 pnpm check          # Biome lint and format check
-pnpm test           # repo tooling tests
+pnpm typecheck
+pnpm test           # repo tooling tests and service tests (needs db:up)
 pnpm safety:guard   # read-only secret scan against origin/main
+
+# run the service locally
+DATABASE_URL=postgres://webhook_hub@127.0.0.1:5432/webhook_hub \
+PGPASSWORD=webhook_hub_dev SHOPIFY_WEBHOOK_SECRET=dev-only-secret pnpm dev
 ```
+
+The values above are the throwaway ones from `compose.yaml`, for local
+development only. The database password is passed as `PGPASSWORD` so that no
+connection URL needs to contain credentials.
 
 ## Decisions
 

@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+.repo-tools
+dev_locals
+docs
+tests
+node_modules
+**/node_modules
+dist
+coverage
+**/.env*
+!.env.example
+**/*.log
+.DS_Store

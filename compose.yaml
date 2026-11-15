@@ -1,0 +1,37 @@
+# Local development. Production composition (Caddy + shared Postgres) is
+# planned separately under deploy/.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: webhook_hub
+      POSTGRES_PASSWORD: webhook_hub_dev
+      POSTGRES_DB: webhook_hub
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U webhook_hub -d webhook_hub']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # `docker compose --profile app up --build` runs the service image locally.
+  app:
+    profiles: ['app']
+    build: .
+    environment:
+      # The password comes from PGPASSWORD (read by pg), so the URL stays free
+      # of credentials.
+      DATABASE_URL: postgres://webhook_hub@postgres:5432/webhook_hub
+      PGPASSWORD: webhook_hub_dev
+      SHOPIFY_WEBHOOK_SECRET: dev-only-secret
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
