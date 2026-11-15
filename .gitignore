@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+/dist
+coverage/
+
+# Environment variables (real secrets live only in the VPS .env)
+.env*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local-only scratch space
+dev_locals/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/settings.local.json

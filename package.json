@@ -1,0 +1,24 @@
+{
+  "name": "webhook-hub",
+  "version": "0.0.0",
+  "description": "Webhook receiver with signature verification, idempotent ingestion, retries and a read-only dashboard API",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.26.0",
+  "scripts": {
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "check": "biome check .",
+    "check:write": "biome check --write .",
+    "safety:guard": "node .repo-tools/scripts/safety-guard.mjs",
+    "test:repo-tools": "node --test \".repo-tools/scripts/**/*.test.mjs\"",
+    "test": "pnpm test:repo-tools"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3"
+  },
+  "engines": {
+    "node": ">=24.0.0 <25",
+    "pnpm": ">=11.26.0 <12"
+  }
+}

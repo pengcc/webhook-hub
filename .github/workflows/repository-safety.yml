@@ -1,0 +1,35 @@
+name: Repository safety
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-quality:
+    name: Baseline quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Check repository secret safety
+        run: pnpm safety:guard
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run baseline quality
+        run: pnpm check
