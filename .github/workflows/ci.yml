@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  service:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    services:
+      # Same throwaway credentials as compose.yaml; the test helper defaults
+      # to them (password via PGPASSWORD).
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: webhook_hub
+          POSTGRES_PASSWORD: webhook_hub_dev
+          POSTGRES_DB: webhook_hub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webhook_hub -d webhook_hub"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

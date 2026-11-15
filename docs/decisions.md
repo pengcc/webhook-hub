@@ -46,7 +46,7 @@
 
 来源：`badminton-club-app` commit `0849b529`（2026-11-05），拷贝后在本仓库维护，不做同步。`agent-project-foundation-kit` 已弃用，不作为来源。
 
-- 已迁移：`.repo-tools/scripts/` 下的 safety-guard（密钥扫描）及其依赖和测试、`.github/workflows/repository-safety.yml`、`biome.json`（去掉 Next/Tailwind 相关项）、`mise.toml`（Node 24、pnpm 11.26.0）、`.claude/settings.json`（deny `gh pr create/merge`；`git push` 和 `gh repo create` 设为 ask）、精简版 `AGENTS.md` / `CLAUDE.md`。
+- 已迁移：`.repo-tools/scripts/` 下的 safety-guard（密钥扫描）及其依赖和测试、`.github/workflows/repository-safety.yml`、`biome.json`（去掉 Next/Tailwind 相关项）、`mise.toml`（Node 24、pnpm 11.26.0）、`.claude/settings.json`（最初照搬 badminton 的 deny `gh pr create/merge`，后改为：`gh pr create` 允许；`gh pr merge`、`git push`、`gh repo create` 每次询问；GitHub MCP 的 PR 创建和合并工具与自动合并开关仍禁止。原因：badminton 的 deny 配套有自己的发布脚本，这里没有，deny 只会挡住唯一的路径）、精简版 `AGENTS.md` / `CLAUDE.md`。
 - 已验证：`pnpm check` 通过；`pnpm test` 27 项通过。
 - 部分验证：仓库已于 2026-11-15 创建（`pengcc/webhook-hub`，公开，MIT）并推送 `main`。`pnpm safety:guard` 在 `main` 上扫描 0 个文件；在 `feat/service-skeleton` 上第一次真实扫描（22 个文件）就拦下了 README、`compose.yaml`、测试辅助文件里带密码的数据库 URL（`credential-bearing-url`，均为本地开发的一次性值，但扫描器不区分，且该规则不识别 URL 里的占位符）。处理方式：不放宽扫描器，改为 URL 不含凭据、密码走 `PGPASSWORD`（`pg` 会读取它），修改后扫描通过。CI workflow 只在 pull request 上触发，尚未在 GitHub 上运行过。
 - `Dockerfile` 已在骨架里写好（多阶段、pnpm 缓存挂载、仅生产依赖、非 root `node` 用户、HEALTHCHECK），见下一节验证结果。
@@ -60,6 +60,13 @@
 - 观察到一次未解释的现象：一次测试运行时本地 Postgres 容器不在运行（`ECONNREFUSED`），重启后全部通过；原因不明，没有更多证据说明测试本身不稳定。
 - 未实现：worker、重试和死信、只读 API、CORS、限流（目前只限制了 body 大小）、`/metrics`、DuckDNS 和 Caddy、VPS 部署。
 - 未验证：GitHub CI 在 PR 上的运行；在 Oracle ARM 主机上运行（本机 Mac 也是 arm64，但不是同一环境）；Shopify 真实投递。
+
+## CI 与流程取舍
+
+- 迁来的 `repository-safety.yml` 只跑密钥扫描和 Biome，不跑类型检查、测试、构建，所以它的绿色对服务本身说明力很弱。已新增 `.github/workflows/ci.yml`：Postgres 17 服务容器，依次 `pnpm typecheck`、`pnpm test`（repo-tools 和服务两套）、`pnpm build`。收益是：在干净环境复现（`--frozen-lockfile`、全新数据库）、防止忘跑、让将来的必需检查有意义。局限：开发者本机已跑过同样的检查，CI 抓的是环境差异和遗漏，不是新类型的 bug。
+- 暂不加 Docker 构建：GitHub 默认运行器是 x86，部署目标是 ARM，构建通过不能证明目标环境没问题；等有自动部署再加（公开仓库可用免费 ARM 运行器，标签和限额未核实）。
+- 未迁移 badminton 的 Issue、Plan、Review、Merge 流程（`implementation-review`、`open-or-update-pr`、`merge-pr` 等）：对单人作品集过重。这是有意取舍，而不是遗漏。待定：是否在 `AGENTS.md` 里加一小段 review 约定（合并前独立一轮审查 PR diff，问题在同一 PR 修，合并由用户决定）。
+- 密钥扫描：自带约 1670 行迁移来的代码；更通用的做法是 CI 里用 gitleaks。待定：保留还是替换。GitHub 自带的 Secret Scanning 和 push protection 已开启。
 
 ## 备选（未采用）
 
