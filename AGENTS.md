@@ -16,9 +16,11 @@ changes; do not duplicate it here.
 
 ## Commands
 
-- `pnpm check` runs Biome (lint and format check).
-- `pnpm test` runs the repo-tool tests.
+- `pnpm check` runs Biome (lint and format check); `pnpm typecheck` runs tsc.
+- `pnpm db:up` starts local Postgres; service tests need it (`pnpm test`).
+- `pnpm test:repo-tools` and `pnpm test:service` run the two suites separately.
 - `pnpm safety:guard` runs the read-only secret scan against `origin/main`.
+- `pnpm build` / `pnpm start` compile and run the service; `pnpm dev` watches.
 
 Requires Node 24 and pnpm 11 (see `mise.toml`, `packageManager`).
 
