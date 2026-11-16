@@ -74,6 +74,15 @@ async function makeDue(id: string) {
   );
 }
 
+async function waitForStatus(id: string, status: string) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if ((await getEvent(id)).status === status) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`event ${id} did not reach ${status}`);
+}
+
 const ok: Handler = async () => {};
 const boom: Handler = async () => {
   throw new Error('downstream unavailable');
@@ -213,7 +222,71 @@ describe('runOnce', () => {
   });
 });
 
+describe('handler failures and bookkeeping', () => {
+  it('times out a hanging handler and schedules a retry', async () => {
+    const id = await insertEvent();
+    const hang: Handler = () => new Promise(() => {});
+    const result = await runOnce({
+      ...options({ 'shopify:orders/create': hang }),
+      handlerTimeoutSeconds: 0.05,
+    });
+
+    expect(result).toMatchObject({ retrying: 1, done: 0, dead: 0 });
+    const row = await getEvent(id);
+    expect(row.status).toBe('failed');
+    expect(row.last_error).toContain('timed out');
+  });
+
+  it('does not treat a failed done-update as a handler failure', async () => {
+    const id = await insertEvent();
+    let calls = 0;
+    const counting: Handler = async () => {
+      calls++;
+    };
+    const flaky = {
+      query: (sql: string, params?: unknown[]) =>
+        sql.includes("status = 'done'") || sql.includes("SET status = 'done'")
+          ? Promise.reject(new Error('connection lost'))
+          : pool.query(sql, params),
+    } as unknown as Pool;
+
+    const result = await runOnce({
+      ...options({ 'shopify:orders/create': counting }),
+      pool: flaky,
+    });
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ claimed: 1, done: 0, retrying: 0, dead: 0 });
+    // Not marked failed or dead: it stays claimed and is reclaimed after the lock timeout.
+    expect(await getEvent(id)).toMatchObject({
+      status: 'processing',
+      attempts: 1,
+    });
+  });
+});
+
 describe('crash recovery', () => {
+  it('dead-letters a reclaimed event past maxAttempts without running the handler', async () => {
+    const id = await insertEvent({
+      status: 'processing',
+      attempts: 3,
+      lockedAtSecondsAgo: 600,
+    });
+    let calls = 0;
+    const counting: Handler = async () => {
+      calls++;
+    };
+    const result = await runOnce({
+      ...options({ 'shopify:orders/create': counting }),
+      maxAttempts: 3,
+      lockTimeoutSeconds: 300,
+    });
+
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({ claimed: 1, dead: 1, done: 0 });
+    expect(await getEvent(id)).toMatchObject({ status: 'dead', attempts: 4 });
+  });
+
   it('reclaims an event stuck in processing past the lock timeout', async () => {
     const id = await insertEvent({
       status: 'processing',
@@ -264,7 +337,7 @@ describe('crash recovery', () => {
       ...options({ 'shopify:orders/create': slow }),
       lockTimeoutSeconds: 0,
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForStatus(id, 'processing');
 
     // Worker B treats the lock as expired, reclaims (attempt 2) and succeeds.
     const fast = await runOnce({

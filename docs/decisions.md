@@ -64,11 +64,11 @@
 
 ## Worker、重试与死信（分支 `feat/worker-retries`，2026-11-16）
 
-- 机制：`src/worker.ts` 的 `runOnce` 用 `FOR UPDATE SKIP LOCKED` 领取到期事件（`pending`/`failed` 且 `next_attempt_at` 已到，或卡在 `processing` 超过锁超时）；领取时 `attempts` 加 1，所以崩溃的那次也计入，不会无限循环；处理成功置 `done`，可重试的失败置 `failed` 并按退避排期，超过 `WORKER_MAX_ATTEMPTS`（默认 8）或抛出 `PermanentError` 则置 `dead`。
+- 机制：`src/worker.ts` 的 `runOnce` 用 `FOR UPDATE SKIP LOCKED` 领取到期事件（`pending`/`failed` 且 `next_attempt_at` 已到，或卡在 `processing` 超过锁超时）；领取时 `attempts` 加 1，崩溃的那次也计入；重新领取时若 `attempts` 已超过上限，直接置 `dead` 且不再运行处理器（PR #2 review 发现：原先只在处理器抛错后才判断上限，崩溃循环的事件永远进不了死信）；处理成功置 `done`，可重试的失败置 `failed` 并按退避排期，达到 `WORKER_MAX_ATTEMPTS`（默认 12，退避总窗口约 1.2–2.4 小时）或抛出 `PermanentError` 则置 `dead`。单个处理器有超时（`WORKER_HANDLER_TIMEOUT_SECONDS`，默认 60，必须小于锁超时），超时按可重试失败处理，但无法取消仍在运行的处理器；回写结果失败不会被当成处理器失败，事件保持 `processing`，锁超时后重新处理（至少一次投递，处理器应当幂等）。worker 使用独立的 3 连接小连接池，不与 HTTP 争用连接。
 - 退避：`src/backoff.ts`，指数增长（基数 5 秒，上限 1 小时）加 "equal jitter"（落在 [exp/2, exp]），避免重试扎堆，也不会几乎立即重试。
 - 围栏：成功、重试、死信三个更新都带 `AND attempts = $n`。如果慢的 worker 在锁过期、事件被别的 worker 重新领取之后才返回，它的更新不会生效，不会覆盖新结果。
 - 处理器：`src/handlers.ts` 目前只校验订单 payload（`orders/create`、`orders/updated` 需要 `id`），不符合的抛 `PermanentError` 直接进死信；没有注册处理器的 topic 标记为 `done`（不是错误，但也意味着这类事件被静默视为已处理，日志里有 `no handler, done`）。**没有做订单的业务投影，处理逻辑是占位**。
-- 运行方式：同进程后台循环，`WORKER_ENABLED`（默认 true）、`WORKER_POLL_MS`、`WORKER_BATCH_SIZE`、`WORKER_MAX_ATTEMPTS`、`WORKER_LOCK_TIMEOUT_SECONDS` 可调；关闭时先停 worker 再关 HTTP 和连接池。迁移 `002_worker_lock.sql` 增加 `locked_at` 列和索引。
+- 运行方式：同进程后台循环，`WORKER_ENABLED`（默认 true）、`WORKER_POLL_MS`、`WORKER_BATCH_SIZE`、`WORKER_MAX_ATTEMPTS`、`WORKER_LOCK_TIMEOUT_SECONDS`、`WORKER_HANDLER_TIMEOUT_SECONDS` 可调；关闭时先停 worker 再关 HTTP 和连接池。迁移 `002_worker_lock.sql` 增加 `locked_at` 列和索引。
 - 已验证：类型检查和 Biome 通过；服务测试 32 项（含 5 项退避、12 项 worker）针对真实 Postgres 通过；变异检查 7 项（去掉围栏、不在领取时加 attempts、最大次数差一、忽略 `next_attempt_at`、去掉行锁、不回收卡住的事件、`PermanentError` 当可重试）都会让相应测试失败，恢复后全部通过。其中去掉围栏和不加 attempts 两项导致的失败数偏多（11、10），原因包含失败后的连锁影响，并不都是各自独立的断言。容器端到端：迁移 `002` 在已有数据的库上应用成功，骨架阶段遗留的 2 个 `pending` 事件被处理为 `done`，合法订单为 `done`，缺 `id` 的 payload 进入 `dead` 且错误信息可读。
 - 未验证 / 已知局限：只去掉 `SKIP LOCKED` 而保留 `FOR UPDATE` 时测试不会失败，因为在 READ COMMITTED 下行锁加条件复查仍能保证不重复处理，`SKIP LOCKED` 的价值在吞吐和等待，没有被测试覆盖；多进程部署下的行为和 worker 并发上限没有压测；没有给 worker 设置每个事件的处理超时（处理器挂起会占用到锁超时才被回收，回收后原处理器的结果会被围栏挡掉）；没有指标，死信目前只能查库或等只读 API。
 - 重放死信：本轮没有做，需要的是写操作，放在管理端，不放公网（见"看板 API"）。

@@ -27,6 +27,8 @@ export type WorkerOptions = {
   batchSize?: number;
   maxAttempts?: number;
   lockTimeoutSeconds?: number;
+  /** Per-event handler limit. Keep it below lockTimeoutSeconds. */
+  handlerTimeoutSeconds?: number;
   backoff?: BackoffOptions;
 };
 
@@ -38,6 +40,27 @@ export type RunResult = {
 };
 
 const MAX_ERROR_LENGTH = 1000;
+const DEFAULT_MAX_ATTEMPTS = 12;
+export const DEFAULT_BATCH_SIZE = 10;
+
+/** Rejects (but cannot cancel the handler) if it runs longer than `seconds`. */
+async function withTimeout(
+  run: () => Promise<void>,
+  seconds: number
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`handler timed out after ${seconds}s`)),
+      seconds * 1000
+    );
+  });
+  try {
+    await Promise.race([run(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 type ClaimedRow = {
   id: string;
@@ -58,9 +81,10 @@ export async function runOnce(options: WorkerOptions): Promise<RunResult> {
     pool,
     handlers,
     logger,
-    batchSize = 10,
-    maxAttempts = 8,
+    batchSize = DEFAULT_BATCH_SIZE,
+    maxAttempts = DEFAULT_MAX_ATTEMPTS,
     lockTimeoutSeconds = 300,
+    handlerTimeoutSeconds = 60,
     backoff,
   } = options;
 
@@ -89,33 +113,71 @@ export async function runOnce(options: WorkerOptions): Promise<RunResult> {
     dead: 0,
   };
 
+  // If the bookkeeping update itself fails, the row stays in `processing` and
+  // is reclaimed after the lock timeout (at-least-once delivery).
+  const finish = async (
+    update: () => Promise<boolean>,
+    outcome: keyof Omit<RunResult, 'claimed'>
+  ) => {
+    try {
+      if (await update()) result[outcome]++;
+    } catch (error) {
+      logger.error({ err: error }, 'could not record event outcome');
+    }
+  };
+
   await Promise.all(
     claimed.rows.map(async (row) => {
-      const event: WorkerEvent = row;
-      const handler = handlers[`${row.source}:${row.topic}`];
+      const log = { id: row.id, topic: row.topic, attempts: row.attempts };
+
+      // Every claim counts as an attempt, including one whose worker crashed.
+      // A reclaimed event past the limit is dead-lettered without running the
+      // handler again, so an event that kills the process cannot loop forever.
+      if (row.attempts > maxAttempts) {
+        const message =
+          'exceeded max attempts; the worker crashed or timed out';
+        await finish(() => markDead(pool, row, message), 'dead');
+        logger.error({ ...log, err: message }, 'event moved to dead letters');
+        return;
+      }
+
+      // Only the handler is inside the try: a failing bookkeeping update must
+      // not be mistaken for a handler failure.
+      let failure: { message: string; permanent: boolean } | undefined;
       try {
-        if (handler) await handler(event);
-        else logger.info({ id: row.id, topic: row.topic }, 'no handler, done');
-        if (await markDone(pool, row)) result.done++;
-      } catch (error) {
-        const message = String(
-          error instanceof Error ? error.message : error
-        ).slice(0, MAX_ERROR_LENGTH);
-        const permanent = error instanceof PermanentError;
-        if (permanent || row.attempts >= maxAttempts) {
-          if (await markDead(pool, row, message)) result.dead++;
-          logger.error(
-            { id: row.id, topic: row.topic, attempts: row.attempts, permanent },
-            'event moved to dead letters'
-          );
+        const handler = handlers[`${row.source}:${row.topic}`];
+        if (handler) {
+          await withTimeout(() => handler(row), handlerTimeoutSeconds);
         } else {
-          const delay = retryDelaySeconds(row.attempts, backoff);
-          if (await markRetry(pool, row, message, delay)) result.retrying++;
-          logger.warn(
-            { id: row.id, topic: row.topic, attempts: row.attempts, delay },
-            'event failed, will retry'
-          );
+          logger.info({ id: row.id, topic: row.topic }, 'no handler, done');
         }
+      } catch (error) {
+        failure = {
+          message: String(error instanceof Error ? error.message : error).slice(
+            0,
+            MAX_ERROR_LENGTH
+          ),
+          permanent: error instanceof PermanentError,
+        };
+      }
+
+      if (!failure) {
+        await finish(() => markDone(pool, row), 'done');
+      } else if (failure.permanent || row.attempts >= maxAttempts) {
+        const { message, permanent } = failure;
+        await finish(() => markDead(pool, row, message), 'dead');
+        logger.error(
+          { ...log, permanent, err: message },
+          'event moved to dead letters'
+        );
+      } else {
+        const { message } = failure;
+        const delay = retryDelaySeconds(row.attempts, backoff);
+        await finish(() => markRetry(pool, row, message, delay), 'retrying');
+        logger.warn(
+          { ...log, delay, err: message },
+          'event failed, will retry'
+        );
       }
     })
   );
@@ -172,7 +234,11 @@ export type WorkerLoop = { stop(): Promise<void> };
 export function startWorker(
   options: WorkerOptions & { pollIntervalMs?: number }
 ): WorkerLoop {
-  const { pollIntervalMs = 1000, batchSize = 10, logger } = options;
+  const {
+    pollIntervalMs = 1000,
+    batchSize = DEFAULT_BATCH_SIZE,
+    logger,
+  } = options;
   const controller = new AbortController();
 
   const loop = (async () => {
