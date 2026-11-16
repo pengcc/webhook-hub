@@ -48,18 +48,30 @@
 
 - 已迁移：`.repo-tools/scripts/` 下的 safety-guard（密钥扫描）及其依赖和测试、`.github/workflows/repository-safety.yml`、`biome.json`（去掉 Next/Tailwind 相关项）、`mise.toml`（Node 24、pnpm 11.26.0）、`.claude/settings.json`（最初照搬 badminton 的 deny `gh pr create/merge`，后改为：`gh pr create` 允许；`gh pr merge`、`git push`、`gh repo create` 每次询问；GitHub MCP 的 PR 创建和合并工具与自动合并开关仍禁止。原因：badminton 的 deny 配套有自己的发布脚本，这里没有，deny 只会挡住唯一的路径）、精简版 `AGENTS.md` / `CLAUDE.md`。
 - 已验证：`pnpm check` 通过；`pnpm test` 27 项通过。
-- 部分验证：仓库已于 2026-11-15 创建（`pengcc/webhook-hub`，公开，MIT）并推送 `main`。`pnpm safety:guard` 在 `main` 上扫描 0 个文件；在 `feat/service-skeleton` 上第一次真实扫描（22 个文件）就拦下了 README、`compose.yaml`、测试辅助文件里带密码的数据库 URL（`credential-bearing-url`，均为本地开发的一次性值，但扫描器不区分，且该规则不识别 URL 里的占位符）。处理方式：不放宽扫描器，改为 URL 不含凭据、密码走 `PGPASSWORD`（`pg` 会读取它），修改后扫描通过。CI workflow 只在 pull request 上触发，尚未在 GitHub 上运行过。
+- 部分验证：仓库已于 2026-11-15 创建（`pengcc/webhook-hub`，公开，MIT）并推送 `main`。`pnpm safety:guard` 在 `main` 上扫描 0 个文件；在 `feat/service-skeleton` 上第一次真实扫描（22 个文件）就拦下了 README、`compose.yaml`、测试辅助文件里带密码的数据库 URL（`credential-bearing-url`，均为本地开发的一次性值，但扫描器不区分，且该规则不识别 URL 里的占位符）。处理方式：不放宽扫描器，改为 URL 不含凭据、密码走 `PGPASSWORD`（`pg` 会读取它），修改后扫描通过。两个 CI 工作流已在 PR #1 上于 GitHub 的 Ubuntu 运行并通过（`Baseline quality`、`Typecheck, test, build`，经 API 读回均为 success）。
 - `Dockerfile` 已在骨架里写好（多阶段、pnpm 缓存挂载、仅生产依赖、非 root `node` 用户、HEALTHCHECK），见下一节验证结果。
 - 不迁移：IONOS / nginx / Mongo 相关部署与备份脚本、dev-session 和 local-production 脚本、分支和 worktree 清理、Task State / Project Memory / goal-mode、Next.js 和 TanStack 专用 skills。部署和备份思路（部署前检查、回滚、备份验证）在 Oracle + Caddy + Postgres 上重写。
 
-## 骨架实现状态（分支 `feat/service-skeleton`，2026-11-15，尚未合并）
+## 骨架实现状态（PR #1，2026-11-15 已 squash 合并为 `6522e32`）
 
 - 已实现：`GET /healthz`；`POST /webhooks/shopify`（先验签，失败返回 401 且不落库；缺投递头或 JSON 非法返回 400；入库幂等；body 上限 1 MiB）；`migrations/001_events.sql`（`events` 表，状态 `pending/processing/done/failed/dead`，`attempts`，`next_attempt_at`，唯一约束 `(source, event_id)`）；zod 环境变量校验（错误只报变量名）；日志脱敏签名头。
 - 已验证：`pnpm typecheck` 和 `pnpm check` 通过；`pnpm test:service` 15 项通过，针对真实 Postgres 17，包括 10 个并发相同投递只落 1 行；变异检查：把验签改成恒为真、去掉唯一约束，相应测试都会失败，恢复后全部通过。Docker 镜像构建成功（arm64，约 374 MB，非 root）；容器连本地 Postgres 做了冒烟测试：合法签名 200 accepted、重复 200 duplicate、错误签名 401，库中只有 1 行。
 - 数据库凭据约定：`DATABASE_URL` 不含密码，密码放 `PGPASSWORD`（VPS 的 `.env` 同理，见 `.env.example`）。已验证：容器用不含密码的 URL 加 `PGPASSWORD` 能连库并入库。
-- 观察到一次未解释的现象：一次测试运行时本地 Postgres 容器不在运行（`ECONNREFUSED`），重启后全部通过；原因不明，没有更多证据说明测试本身不稳定。
-- 未实现：worker、重试和死信、只读 API、CORS、限流（目前只限制了 body 大小）、`/metrics`、DuckDNS 和 Caddy、VPS 部署。
-- 未验证：GitHub CI 在 PR 上的运行；在 Oracle ARM 主机上运行（本机 Mac 也是 arm64，但不是同一环境）；Shopify 真实投递。
+- 本地测试偶发 `ECONNREFUSED`（Postgres 容器不在运行）：2026-11-16 复现并确认一个原因：`docker compose --profile app down` 会连同 `postgres` 服务一起删除，而不只是停 `app`。测试依赖该容器，所以冒烟测试之后紧接着跑测试会失败；`pnpm db:up` 后全部通过。2026-11-15 那次是否同一原因没有证据，只能说这是一个已确认存在的机制。以后冒烟测试收尾用 `docker compose --profile app stop app`，不要用 `down`。
+- 未实现（骨架当时）：worker、重试和死信（已在下一节完成）、只读 API、CORS、限流（目前只限制了 body 大小）、`/metrics`、DuckDNS 和 Caddy、VPS 部署。
+- 未验证：在 Oracle ARM 主机上运行（本机 Mac 也是 arm64，但不是同一环境）；Shopify 真实投递。
+- `main` 分支保护（2026-11-15 设置，已读回确认）：必须走 PR；必需检查 `Baseline quality` 和 `Typecheck, test, build`；禁止强推和删除；不要求审批（所需审批数 0）；`enforce_admins` 为 false，管理员可绕过，所以对仓库所有者本人并不强制。
+
+## Worker、重试与死信（分支 `feat/worker-retries`，2026-11-16）
+
+- 机制：`src/worker.ts` 的 `runOnce` 用 `FOR UPDATE SKIP LOCKED` 领取到期事件（`pending`/`failed` 且 `next_attempt_at` 已到，或卡在 `processing` 超过锁超时）；领取时 `attempts` 加 1，崩溃的那次也计入；重新领取时若 `attempts` 已超过上限，直接置 `dead` 且不再运行处理器（PR #2 review 发现：原先只在处理器抛错后才判断上限，崩溃循环的事件永远进不了死信）；处理成功置 `done`，可重试的失败置 `failed` 并按退避排期，达到 `WORKER_MAX_ATTEMPTS`（默认 12，退避总窗口约 1.2–2.4 小时）或抛出 `PermanentError` 则置 `dead`。单个处理器有超时（`WORKER_HANDLER_TIMEOUT_SECONDS`，默认 60，必须小于锁超时），超时按可重试失败处理，但无法取消仍在运行的处理器；回写结果失败不会被当成处理器失败，事件保持 `processing`，锁超时后重新处理（至少一次投递，处理器应当幂等）。worker 使用独立的 3 连接小连接池，不与 HTTP 争用连接。
+- 退避：`src/backoff.ts`，指数增长（基数 5 秒，上限 1 小时）加 "equal jitter"（落在 [exp/2, exp]），避免重试扎堆，也不会几乎立即重试。
+- 围栏：成功、重试、死信三个更新都带 `AND attempts = $n`。如果慢的 worker 在锁过期、事件被别的 worker 重新领取之后才返回，它的更新不会生效，不会覆盖新结果。
+- 处理器：`src/handlers.ts` 目前只校验订单 payload（`orders/create`、`orders/updated` 需要 `id`），不符合的抛 `PermanentError` 直接进死信；没有注册处理器的 topic 标记为 `done`（不是错误，但也意味着这类事件被静默视为已处理，日志里有 `no handler, done`）。**没有做订单的业务投影，处理逻辑是占位**。
+- 运行方式：同进程后台循环，`WORKER_ENABLED`（默认 true）、`WORKER_POLL_MS`、`WORKER_BATCH_SIZE`、`WORKER_MAX_ATTEMPTS`、`WORKER_LOCK_TIMEOUT_SECONDS`、`WORKER_HANDLER_TIMEOUT_SECONDS` 可调；关闭时先停 worker 再关 HTTP 和连接池。迁移 `002_worker_lock.sql` 增加 `locked_at` 列和索引。
+- 已验证：类型检查和 Biome 通过；服务测试 32 项（含 5 项退避、12 项 worker）针对真实 Postgres 通过；变异检查 7 项（去掉围栏、不在领取时加 attempts、最大次数差一、忽略 `next_attempt_at`、去掉行锁、不回收卡住的事件、`PermanentError` 当可重试）都会让相应测试失败，恢复后全部通过。其中去掉围栏和不加 attempts 两项导致的失败数偏多（11、10），原因包含失败后的连锁影响，并不都是各自独立的断言。容器端到端：迁移 `002` 在已有数据的库上应用成功，骨架阶段遗留的 2 个 `pending` 事件被处理为 `done`，合法订单为 `done`，缺 `id` 的 payload 进入 `dead` 且错误信息可读。
+- 未验证 / 已知局限：只去掉 `SKIP LOCKED` 而保留 `FOR UPDATE` 时测试不会失败，因为在 READ COMMITTED 下行锁加条件复查仍能保证不重复处理，`SKIP LOCKED` 的价值在吞吐和等待，没有被测试覆盖；多进程部署下的行为和 worker 并发上限没有压测；没有给 worker 设置每个事件的处理超时（处理器挂起会占用到锁超时才被回收，回收后原处理器的结果会被围栏挡掉）；没有指标，死信目前只能查库或等只读 API。
+- 重放死信：本轮没有做，需要的是写操作，放在管理端，不放公网（见"看板 API"）。
 
 ## CI 与流程取舍
 
@@ -81,7 +93,7 @@
 1. 最小骨架（本地）：Fastify 服务，`/healthz` 加 `POST /webhooks/shopify`（验签 + 幂等入库），一条迁移，一组测试；Compose 本地能跑。
 2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。
 3. 部署骨架：创建 GitHub 仓库并推送，在 VPS 上部署，用模拟发送器从外网打一次。
-4. 功能补齐：worker、重试、死信，只读 API，CORS，限流。
+4. 功能补齐：worker、重试、死信（已完成，见上）；接下来：只读 API，CORS，限流，`/metrics`。
 5. portfolio 加看板和降级快照。
 6. 运维：`pg_dump` 每日备份到 Object Storage，做一次恢复演练；日志轮转，镜像定期 prune；容器内存限制（Postgres 约 512 MB，Node 约 256 MB，Caddy 约 64 MB）。
 7. 可选：接 Shopify 开发商店，在 README 放截图或录屏。

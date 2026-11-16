@@ -9,10 +9,12 @@ as Shopify push webhooks, and the receiving side has to be fast, safe against
 forgery, tolerant of duplicate and out-of-order deliveries, and observable.
 
 > **Status: early development.** Implemented so far: signature verification,
-> idempotent ingestion of Shopify webhooks into Postgres, a health endpoint,
-> migrations, tests against a real Postgres, and a Docker image. Not yet
-> implemented: the worker with retries and dead letters, the read-only API,
-> rate limiting, and deployment.
+> idempotent ingestion of Shopify webhooks into Postgres, a background worker
+> with exponential backoff, retries and dead letters, crash recovery, a health
+> endpoint, migrations, tests against a real Postgres, CI, and a Docker image.
+> Not yet implemented: the read-only API, rate limiting, metrics, and
+> deployment. Event processing itself is a placeholder that only validates
+> order payloads.
 
 ## What it will do
 
