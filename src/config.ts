@@ -8,6 +8,15 @@ const schema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+  // Background worker. Disable to run only the HTTP receiver in a process.
+  WORKER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  WORKER_POLL_MS: z.coerce.number().int().min(50).default(1000),
+  WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(8),
+  WORKER_LOCK_TIMEOUT_SECONDS: z.coerce.number().int().min(10).default(300),
 });
 
 export type Config = z.infer<typeof schema>;
