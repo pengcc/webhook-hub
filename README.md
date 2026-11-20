@@ -10,11 +10,11 @@ forgery, tolerant of duplicate and out-of-order deliveries, and observable.
 
 > **Status: early development.** Implemented so far: signature verification,
 > idempotent ingestion of Shopify webhooks into Postgres, a background worker
-> with exponential backoff, retries and dead letters, crash recovery, a health
-> endpoint, migrations, tests against a real Postgres, CI, and a Docker image.
-> Not yet implemented: the read-only API, rate limiting, metrics, and
-> deployment. Event processing itself is a placeholder that only validates
-> order payloads.
+> with exponential backoff, retries and dead letters, crash recovery, a
+> read-only API (`/events`, `/events/:id`, `/stats`), a health endpoint,
+> migrations, tests against a real Postgres, CI, and a Docker image. Not yet
+> implemented: CORS, rate limiting, metrics, and deployment. Event processing
+> itself is a placeholder that only validates order payloads.
 
 ## What it will do
 

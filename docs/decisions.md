@@ -93,7 +93,7 @@
 1. 最小骨架（本地）：Fastify 服务，`/healthz` 加 `POST /webhooks/shopify`（验签 + 幂等入库），一条迁移，一组测试；Compose 本地能跑。
 2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。
 3. 部署骨架：创建 GitHub 仓库并推送，在 VPS 上部署，用模拟发送器从外网打一次。
-4. 功能补齐：worker、重试、死信（已完成，见上）；接下来：只读 API，CORS，限流，`/metrics`。
+4. 功能补齐：worker、重试、死信（已完成，见上）；只读 API 已完成（`src/read-api.ts`：`GET /events` 按 id 倒序、游标分页、可按 `status`/`topic` 过滤；`GET /events/:id`；`GET /stats` 各状态计数）；接下来：CORS，限流，`/metrics`。API 响应不包含 `payload`，列表和详情只返回投递元数据和处理状态（这是为了公网接口不暴露订单内容，待确认）。
 5. portfolio 加看板和降级快照。
 6. 运维：`pg_dump` 每日备份到 Object Storage，做一次恢复演练；日志轮转，镜像定期 prune；容器内存限制（Postgres 约 512 MB，Node 约 256 MB，Caddy 约 64 MB）。
 7. 可选：接 Shopify 开发商店，在 README 放截图或录屏。
