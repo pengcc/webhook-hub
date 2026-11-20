@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { createTestDb } from './helpers.js';
@@ -11,6 +12,7 @@ beforeAll(async () => {
   app = buildApp({
     pool: db.pool,
     config: { SHOPIFY_WEBHOOK_SECRET: 'unused', LOG_LEVEL: 'silent' },
+    statsCacheMs: 0,
   });
   await app.ready();
 });
@@ -105,7 +107,36 @@ describe('GET /events', () => {
     ).json();
     expect(updated.items).toHaveLength(1);
     expect(updated.items[0].event_id).toBe('wh-3');
-    expect(updated.items[0].last_error).toBe('boom');
+    expect(updated.items[0].has_error).toBe(true);
+    expect(JSON.stringify(updated)).not.toContain('boom');
+  });
+
+  it('keeps the filter when paging with a cursor', async () => {
+    for (let i = 1; i <= 6; i++) {
+      await insert(i, { status: i % 2 === 0 ? 'dead' : 'done' });
+    }
+    const first = (
+      await app.inject({ method: 'GET', url: '/events?status=dead&limit=2' })
+    ).json();
+    expect(first.items.map((e: { event_id: string }) => e.event_id)).toEqual([
+      'wh-6',
+      'wh-4',
+    ]);
+    const second = (
+      await app.inject({
+        method: 'GET',
+        url: `/events?status=dead&limit=2&cursor=${first.next_cursor}`,
+      })
+    ).json();
+    expect(second.items.map((e: { event_id: string }) => e.event_id)).toEqual([
+      'wh-2',
+    ]);
+    expect(second.next_cursor).toBeNull();
+  });
+
+  it('accepts the maximum page size', async () => {
+    const res = await app.inject({ method: 'GET', url: '/events?limit=100' });
+    expect(res.statusCode).toBe(200);
   });
 
   it('rejects invalid query parameters', async () => {
@@ -133,9 +164,10 @@ describe('GET /events/:id', () => {
       status: 'dead',
       topic: 'orders/create',
       event_id: 'wh-1',
-      last_error: 'boom',
+      has_error: true,
     });
     expect(body).not.toHaveProperty('payload');
+    expect(body).not.toHaveProperty('last_error');
   });
 
   it('returns 404 for unknown and malformed ids', async () => {
@@ -165,5 +197,54 @@ describe('GET /stats', () => {
         by_status: { pending: 0, processing: 0, done: 2, failed: 0, dead: 1 },
       }
     );
+  });
+});
+
+describe('stats cache', () => {
+  it('serves repeated requests from one query within the window', async () => {
+    const cached = buildApp({
+      pool: db.pool,
+      config: { SHOPIFY_WEBHOOK_SECRET: 'unused', LOG_LEVEL: 'silent' },
+      statsCacheMs: 60_000,
+    });
+    await cached.ready();
+    try {
+      await insert(1);
+      const first = (
+        await cached.inject({ method: 'GET', url: '/stats' })
+      ).json();
+      await insert(2);
+      const res = await cached.inject({ method: 'GET', url: '/stats' });
+
+      expect(first.total).toBe(1);
+      expect(res.json().total).toBe(1);
+      expect(res.headers['cache-control']).toBe('public, max-age=60');
+    } finally {
+      await cached.close();
+    }
+  });
+});
+
+describe('database failures', () => {
+  it('returns a generic 500 without internal error text', async () => {
+    const broken = buildApp({
+      pool: {
+        query: () =>
+          Promise.reject(new Error('connect ECONNREFUSED 10.9.8.7:5432')),
+      } as unknown as Pool,
+      config: { SHOPIFY_WEBHOOK_SECRET: 'unused', LOG_LEVEL: 'silent' },
+      statsCacheMs: 0,
+    });
+    await broken.ready();
+    try {
+      for (const url of ['/events', '/events/1', '/stats']) {
+        const res = await broken.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(500);
+        expect(res.body, url).not.toContain('10.9.8.7');
+        expect(res.json()).toEqual({ error: 'internal error' });
+      }
+    } finally {
+      await broken.close();
+    }
   });
 });

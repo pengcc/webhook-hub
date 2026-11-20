@@ -93,7 +93,7 @@
 1. 最小骨架（本地）：Fastify 服务，`/healthz` 加 `POST /webhooks/shopify`（验签 + 幂等入库），一条迁移，一组测试；Compose 本地能跑。
 2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。
 3. 部署骨架：创建 GitHub 仓库并推送，在 VPS 上部署，用模拟发送器从外网打一次。
-4. 功能补齐：worker、重试、死信（已完成，见上）；只读 API 已完成（`src/read-api.ts`：`GET /events` 按 id 倒序、游标分页、可按 `status`/`topic` 过滤；`GET /events/:id`；`GET /stats` 各状态计数）；接下来：CORS，限流，`/metrics`。API 响应不包含 `payload`，列表和详情只返回投递元数据和处理状态（这是为了公网接口不暴露订单内容，待确认）。
+4. 功能补齐：worker、重试、死信（已完成，见上）；只读 API 已完成（`src/read-api.ts`：`GET /events` 按 id 倒序、游标分页、可按 `status`/`topic` 过滤；`GET /events/:id`；`GET /stats` 各状态计数）；接下来：CORS，限流，`/metrics`。API 响应不包含 `payload`，列表和详情只返回投递元数据和处理状态（这是为了公网接口不暴露订单内容，待确认）；也不返回 `last_error` 原文（可能含下游地址等内部信息），只给 `has_error` 布尔值。`/stats` 要全表计数，所以在内存里缓存 5 秒（并发请求共享一次查询，失败不缓存）；所有 5xx 统一返回 `{"error":"internal error"}`，错误详情只写日志。已知未做：读接口仍用读写连接池（原计划是只读角色）；按 `status`/`topic` 筛选没有专用索引；限流还没有，所以公网部署前必须先做。
 5. portfolio 加看板和降级快照。
 6. 运维：`pg_dump` 每日备份到 Object Storage，做一次恢复演练；日志轮转，镜像定期 prune；容器内存限制（Postgres 约 512 MB，Node 约 256 MB，Caddy 约 64 MB）。
 7. 可选：接 Shopify 开发商店，在 README 放截图或录屏。

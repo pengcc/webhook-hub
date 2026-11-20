@@ -9,13 +9,19 @@ const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 type AppDeps = {
   pool: Pool;
   config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'>;
+  /** See registerReadApi. Tests set 0 to see fresh counts. */
+  statsCacheMs?: number;
 };
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function buildApp({ pool, config }: AppDeps): FastifyInstance {
+export function buildApp({
+  pool,
+  config,
+  statsCacheMs,
+}: AppDeps): FastifyInstance {
   const app = Fastify({
     bodyLimit: MAX_BODY_BYTES,
     logger: {
@@ -93,7 +99,22 @@ export function buildApp({ pool, config }: AppDeps): FastifyInstance {
       .send({ status: duplicate ? 'duplicate' : 'accepted' });
   });
 
-  registerReadApi(app, pool);
+  // Never send internal error text (database host, query details) to clients.
+  app.setErrorHandler((error, req, reply) => {
+    const status =
+      typeof (error as { statusCode?: unknown }).statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+    if (status >= 500) {
+      req.log.error({ err: error }, 'request failed');
+      return reply.code(status).send({ error: 'internal error' });
+    }
+    return reply
+      .code(status)
+      .send({ error: error instanceof Error ? error.message : 'bad request' });
+  });
+
+  registerReadApi(app, pool, { statsCacheMs });
 
   return app;
 }

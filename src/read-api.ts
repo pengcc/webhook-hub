@@ -5,6 +5,8 @@ import { z } from 'zod';
 /**
  * Read-only API for the dashboard. Payloads are deliberately not exposed: the
  * list and detail views show delivery metadata and processing state only.
+ * Raw error text (`last_error`) is not exposed either; it can contain internal
+ * details, so the API only says whether an error was recorded.
  */
 
 const STATUSES = ['pending', 'processing', 'done', 'failed', 'dead'] as const;
@@ -26,7 +28,8 @@ const idParam = z.object({
 });
 
 const EVENT_COLUMNS = `id, source, event_id, correlation_id, topic, shop, status,
-  attempts, received_at, next_attempt_at, processed_at, last_error`;
+  attempts, received_at, next_attempt_at, processed_at,
+  (last_error IS NOT NULL) AS has_error`;
 
 type EventRow = {
   id: string;
@@ -40,10 +43,44 @@ type EventRow = {
   received_at: Date;
   next_attempt_at: Date;
   processed_at: Date | null;
-  last_error: string | null;
+  has_error: boolean;
 };
 
-export function registerReadApi(app: FastifyInstance, pool: Pool): void {
+type ReadApiOptions = {
+  /** How long /stats may be served from memory. 0 disables the cache. */
+  statsCacheMs?: number;
+};
+
+type Stats = { total: number; by_status: Record<Status, number> };
+
+async function loadStats(pool: Pool): Promise<Stats> {
+  const { rows } = await pool.query<{ status: string; count: string }>(
+    'SELECT status, count(*) AS count FROM events GROUP BY status'
+  );
+  const byStatus: Record<Status, number> = {
+    pending: 0,
+    processing: 0,
+    done: 0,
+    failed: 0,
+    dead: 0,
+  };
+  for (const row of rows) {
+    if (row.status in byStatus) {
+      byStatus[row.status as Status] = Number(row.count);
+    }
+  }
+  const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0);
+  return { total, by_status: byStatus };
+}
+
+export function registerReadApi(
+  app: FastifyInstance,
+  pool: Pool,
+  { statsCacheMs = 5000 }: ReadApiOptions = {}
+): void {
+  // The count scans the whole table, so concurrent and repeated requests share
+  // one query per window. A failed load is not cached.
+  let statsCache: { at: number; value: Promise<Stats> } | undefined;
   app.get('/events', async (req, reply) => {
     const parsed = listQuery.safeParse(req.query);
     if (!parsed.success) {
@@ -99,24 +136,20 @@ export function registerReadApi(app: FastifyInstance, pool: Pool): void {
     return toEvent(row);
   });
 
-  app.get('/stats', async () => {
-    const { rows } = await pool.query<{ status: string; count: string }>(
-      'SELECT status, count(*) AS count FROM events GROUP BY status'
-    );
-    const byStatus: Record<Status, number> = {
-      pending: 0,
-      processing: 0,
-      done: 0,
-      failed: 0,
-      dead: 0,
-    };
-    for (const row of rows) {
-      if (row.status in byStatus) {
-        byStatus[row.status as Status] = Number(row.count);
-      }
+  app.get('/stats', async (_req, reply) => {
+    const now = Date.now();
+    if (!statsCache || now - statsCache.at >= statsCacheMs) {
+      const value = loadStats(pool);
+      statsCache = { at: now, value };
+      value.catch(() => {
+        if (statsCache?.value === value) statsCache = undefined;
+      });
     }
-    const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0);
-    return { total, by_status: byStatus };
+    reply.header(
+      'cache-control',
+      `public, max-age=${Math.floor(statsCacheMs / 1000)}`
+    );
+    return statsCache.value;
   });
 }
 
@@ -133,6 +166,6 @@ function toEvent(row: EventRow) {
     received_at: row.received_at,
     next_attempt_at: row.next_attempt_at,
     processed_at: row.processed_at,
-    last_error: row.last_error,
+    has_error: row.has_error,
   };
 }
