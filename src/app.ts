@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { Config } from './config.js';
+import { registerReadApi } from './read-api.js';
 import { verifyShopifyHmac } from './shopify.js';
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MiB
@@ -91,6 +92,8 @@ export function buildApp({ pool, config }: AppDeps): FastifyInstance {
       .code(200)
       .send({ status: duplicate ? 'duplicate' : 'accepted' });
   });
+
+  registerReadApi(app, pool);
 
   return app;
 }
