@@ -138,18 +138,23 @@ export function registerReadApi(
 
   app.get('/stats', async (_req, reply) => {
     const now = Date.now();
-    if (!statsCache || now - statsCache.at >= statsCacheMs) {
+    let entry = statsCache;
+    if (!entry || now - entry.at >= statsCacheMs) {
       const value = loadStats(pool);
-      statsCache = { at: now, value };
+      const fresh = { at: now, value };
+      entry = fresh;
+      statsCache = fresh;
       value.catch(() => {
-        if (statsCache?.value === value) statsCache = undefined;
+        if (statsCache === fresh) statsCache = undefined;
       });
     }
+    // Await first: a failed load must not leave a cacheable header on the 500.
+    const stats = await entry.value;
     reply.header(
       'cache-control',
       `public, max-age=${Math.floor(statsCacheMs / 1000)}`
     );
-    return statsCache.value;
+    return stats;
   });
 }
 

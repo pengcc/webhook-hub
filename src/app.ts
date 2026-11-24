@@ -107,7 +107,11 @@ export function buildApp({
         : 500;
     if (status >= 500) {
       req.log.error({ err: error }, 'request failed');
-      return reply.code(status).send({ error: 'internal error' });
+      // Headers set before the error was thrown survive; never let a proxy cache a 5xx.
+      return reply
+        .code(status)
+        .header('cache-control', 'no-store')
+        .send({ error: 'internal error' });
     }
     return reply
       .code(status)

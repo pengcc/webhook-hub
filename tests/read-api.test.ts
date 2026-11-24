@@ -225,6 +225,62 @@ describe('stats cache', () => {
   });
 });
 
+describe('stats cache under failure and concurrency', () => {
+  const statsRows = { rows: [{ status: 'done', count: '2' }] };
+  const config = {
+    SHOPIFY_WEBHOOK_SECRET: 'unused',
+    LOG_LEVEL: 'silent',
+  } as const;
+
+  it('does not cache a failed load', async () => {
+    let calls = 0;
+    const flaky = {
+      query: () =>
+        ++calls === 1
+          ? Promise.reject(new Error('transient'))
+          : Promise.resolve(statsRows),
+    } as unknown as Pool;
+    const flakyApp = buildApp({ pool: flaky, config, statsCacheMs: 60_000 });
+    await flakyApp.ready();
+    try {
+      const failed = await flakyApp.inject({ method: 'GET', url: '/stats' });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.headers['cache-control']).toBe('no-store');
+
+      const ok = await flakyApp.inject({ method: 'GET', url: '/stats' });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().by_status.done).toBe(2);
+      expect(calls).toBe(2);
+    } finally {
+      await flakyApp.close();
+    }
+  });
+
+  it('shares one query between concurrent requests', async () => {
+    let calls = 0;
+    const slow = {
+      query: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 30));
+        return statsRows;
+      },
+    } as unknown as Pool;
+    const slowApp = buildApp({ pool: slow, config, statsCacheMs: 60_000 });
+    await slowApp.ready();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          slowApp.inject({ method: 'GET', url: '/stats' })
+        )
+      );
+      expect(results.every((r) => r.statusCode === 200)).toBe(true);
+      expect(calls).toBe(1);
+    } finally {
+      await slowApp.close();
+    }
+  });
+});
+
 describe('database failures', () => {
   it('returns a generic 500 without internal error text', async () => {
     const broken = buildApp({
@@ -241,6 +297,7 @@ describe('database failures', () => {
         const res = await broken.inject({ method: 'GET', url });
         expect(res.statusCode, url).toBe(500);
         expect(res.body, url).not.toContain('10.9.8.7');
+        expect(res.headers['cache-control'], url).toBe('no-store');
         expect(res.json()).toEqual({ error: 'internal error' });
       }
     } finally {
