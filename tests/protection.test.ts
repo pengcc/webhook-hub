@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 
@@ -221,6 +221,44 @@ describe('rate limiting details', () => {
       (i) => `198.51.100.9, 203.0.113.${i}`
     );
     expect(codes).toEqual([200, 200, 200, 200]);
+  });
+});
+
+describe('misconfigured proxy warning', () => {
+  const limited = { ...base, RATE_LIMIT_MAX: 3, RATE_LIMIT_WINDOW_SECONDS: 60 };
+
+  async function warningsFor(
+    config: Parameters<typeof buildApp>[0]['config'],
+    headers: Record<string, string>,
+    requests = 3
+  ) {
+    const app = await appWith(config);
+    const warn = vi.spyOn(app.log, 'warn');
+    try {
+      for (let i = 0; i < requests; i++) {
+        await app.inject({ method: 'GET', url: '/events', headers });
+      }
+      return warn.mock.calls.map((call) => String(call[0]));
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('warns once when X-Forwarded-For arrives but the proxy is not trusted', async () => {
+    const warnings = await warningsFor(limited, {
+      'x-forwarded-for': '203.0.113.5',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('TRUST_PROXY');
+  });
+
+  it('stays quiet when the proxy is trusted, no header is sent, or no limiter runs', async () => {
+    const header = { 'x-forwarded-for': '203.0.113.5' };
+    expect(await warningsFor({ ...limited, TRUST_PROXY: 1 }, header)).toEqual(
+      []
+    );
+    expect(await warningsFor(limited, {})).toEqual([]);
+    expect(await warningsFor(base, header)).toEqual([]);
   });
 });
 

@@ -67,6 +67,20 @@ export function buildApp({
     maxAge: 600,
   });
 
+  // With the proxy untrusted every client shows up as the proxy's address and
+  // shares one rate limit bucket. A forwarded header with TRUST_PROXY=false
+  // means that is probably a misconfiguration, so say so once.
+  if (config.RATE_LIMIT_MAX !== undefined && !config.TRUST_PROXY) {
+    let warned = false;
+    app.addHook('onRequest', async (req) => {
+      if (warned || !req.headers['x-forwarded-for']) return;
+      warned = true;
+      app.log.warn(
+        'X-Forwarded-For received while TRUST_PROXY is false: every client behind the proxy shares one rate limit bucket. Set TRUST_PROXY=1 behind a single reverse proxy.'
+      );
+    });
+  }
+
   // Signature verification needs the exact bytes that were sent.
   app.addContentTypeParser(
     'application/json',
