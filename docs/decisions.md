@@ -36,7 +36,7 @@
 
 - 已核实：OCI Cost Analysis 截至 2026-11-15 各项（Compute、Block Storage、Object Storage、VCN、Telemetry）均为 €0.00；账单数据约有 24 小时延迟。
 - 已核实：`duckdns.org` 在 Public Suffix List 中，Let's Encrypt 限额按子域名独立计算；DuckDNS 官网当前可访问。`sslip.io` 不在该列表中，限额与其他用户共用，不作为首选。
-- 已核实（2026-11-27）：在本 VPS 上起了 `infra`（Caddy + Postgres 17）。Caddy 先后从 Let's Encrypt staging 和正式环境为 `lab-2026.duckdns.org` 签发了证书（HTTP-01，日志里是多个地点的验证请求，说明 TCP 80 从公网可达）；从外网访问 `https://lab-2026.duckdns.org/` 证书校验通过，应用容器不存在时返回 502，`http://` 返回 308 跳转到 https；日志里出现过互联网扫描器经 HTTP/2 来的请求，说明 TCP 443 也可达。Postgres 初始化脚本只在首次启动运行一次，创建了 `webhook_hub` 角色和库并撤销了 PUBLIC 的 CONNECT，状态 `healthy`，没有发布端口。`deploy/README.md` 里克隆、`.env`、staging 演练、启动和切换到正式环境的步骤在 VPS 上实际跑通；切换时删掉 `.env` 里的 `ACME_CA` 再 `docker compose up -d`，只重建了 Caddy。
+- 已核实（2026-11-27）：在本 VPS 上起了 `infra`（Caddy + Postgres 17）。Caddy 先后从 Let's Encrypt staging 和正式环境为 `lab-2026.duckdns.org` 签发了证书（HTTP-01，日志里是多个地点的验证请求，说明 TCP 80 从公网可达）；从外网访问 `https://lab-2026.duckdns.org/` 证书校验通过，应用容器不存在时返回 502，`http://` 返回 308 跳转到 https；日志里出现过互联网扫描器经 HTTP/2 来的请求，说明 TCP 443 也可达。Postgres 初始化脚本只在首次启动运行一次，创建了 `webhook_hub` 角色和库并撤销了 PUBLIC 的 CONNECT，状态 `healthy`，没有发布端口。`deploy/README.md` 里克隆、staging 演练、启动和切换到正式环境的步骤在 VPS 上实际跑通；`.env` 一步实际是用 `openssl rand -hex 24` 生成的密码写入的，README 里写的 `-base64` 没在 VPS 上试过；切换时删掉 `.env` 里的 `ACME_CA` 再 `docker compose up -d`，只重建了 Caddy。
 - 未核实：DuckDNS 长期稳定性（个人运营，无 SLA）；Shopify Partner / 开发商店当前条款（注册时以页面为准）；Shopify 真实投递的请求头是否与上述一致（目前只用本地签名请求测试过，要等开发商店或真实投递来验证）。
 - 闲置回收：Always Free 的回收规则可能覆盖常驻的小服务，官方文档未确认 PAYG 是否豁免，不作保证。部署轻量服务本身不会让 CPU、网络、内存的第 95 百分位超过 20%，所以"尽快部署"不能当作防回收手段。缓解办法是整个环境写成 compose 加备份加 runbook，能在新实例上重建。
 

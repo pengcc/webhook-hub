@@ -71,9 +71,9 @@ the name the Caddyfile forwards to).
    `chmod 600 .env`.
 3. Optional dry run of certificate issuance: set `ACME_CA` in `.env` to the
    Let's Encrypt staging directory (append the line once; how Compose
-   treats a duplicated key was not tested), start, check, then delete that line and run
-   `sudo docker compose up -d` again, which recreates only Caddy. Staging
-   certificates are not trusted by browsers.
+   treats a duplicated key was not tested), start, check, then delete that
+   line and run `sudo docker compose up -d` again, which recreates only
+   Caddy. Staging certificates are not trusted by browsers.
 4. From `/opt/webhook-hub/deploy/infra`: `sudo docker compose up -d`.
 5. Check: `sudo docker compose ps`, and `curl -I https://lab-2026.duckdns.org`.
    Until the application runs, Caddy answers 502 once it has a certificate
