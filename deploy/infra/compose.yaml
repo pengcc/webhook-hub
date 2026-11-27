@@ -3,9 +3,9 @@
 # by the Caddyfile, and `db` to reach Postgres. Caddy is not on `db`, so the
 # internet-facing container cannot reach the database.
 #
-# Run from /opt/infra on the VPS with a .env next to this file (copy
-# .env.example, fill in real values; the real file is never committed).
-# See ../README.md.
+# Run from /opt/webhook-hub/deploy/infra on the VPS (a clone of this
+# repository) with a .env next to this file (copy .env.example, fill in real
+# values; the real file is never committed). See ../README.md.
 name: infra
 
 x-logging: &logging

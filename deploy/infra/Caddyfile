@@ -1,7 +1,8 @@
 {
 	# Let's Encrypt over HTTP-01 (needs TCP 80 reachable). The default is the
-	# production directory; compose can switch it to staging for a dry run.
-	acme_ca {$ACME_CA}
+	# production directory; set ACME_CA to switch it, for example to staging for
+	# a dry run. The default lives here so the file works and validates on its own.
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
 }
 
 lab-2026.duckdns.org {

@@ -13,7 +13,7 @@
 | 降级 | API 不通时显示构建时生成的静态快照，并标注 live API 暂不可用 |
 | 后端部署 | Oracle VPS，Docker Compose（caddy / webhook-hub / postgres，均有 arm64 镜像） |
 | 反向代理 | Caddy，按子域名分发，HTTP-01 自动签证书，需放行 80/443（OCI Security List + 主机 iptables 都要改） |
-| 主机名 | 先用 DuckDNS 子域名（暂时可用即可），将来换域名只改 Caddy 主机名和 `VITE_API_BASE` |
+| 主机名 | 先用 DuckDNS 子域名（暂时可用即可），已注册 `lab-2026.duckdns.org`；将来换域名只改 Caddy 主机名和 `VITE_API_BASE` |
 | 演示数据 | 先做模拟发送器（Shopify 格式，可制造错签名、重复、下游失败）；Shopify 开发商店是可选的锦上添花 |
 | 数据标注 | 看板用 `source` 区分 `synthetic` / `shopify-dev`，不接真实客户数据 |
 | 密钥 | 只放 VPS 的 `.env`，仓库只有 `.env.example` |
@@ -25,6 +25,8 @@
 - 先落库再处理：验签、入库后立即 2xx，worker 异步处理。
 - 重试：`attempts`、`next_attempt_at`、指数退避加抖动，超限转 `dead`。
 - 看板 API：`GET /events`、`/events/:id`、`/stats`；限流；CORS 只允许 portfolio 的 Origin；重放按钮不放公网。
+- Compose 布局（已定）：Caddy 和 Postgres 是 webhook-hub 与 DealWatch 共用的基础设施，VPS 上单独一个 `infra` compose，各项目 compose 只含自己的服务；`infra` 的配置放在本仓库的 `deploy/infra/` 下，等 DealWatch 加入时再决定是否拆出去。网络分两个：`edge`（Caddy 和各应用，Caddy 往应用转发）和 `db`（Postgres 和各应用，`internal`，无出站路由），Caddy 不在 `db` 上，面向互联网的容器够不到数据库（PR #5 的 review 指出原先的单一 `edge` 太平）。每个项目一个数据库和角色，并且要 `REVOKE CONNECT ON DATABASE ... FROM PUBLIC`：本地测试发现 PostgreSQL 默认允许任何角色连任何数据库，不撤销的话"每个项目独立数据库"在连接层并不成立。初始化脚本只在数据目录为空时运行一次，之后新增项目的库要手工创建，步骤和第一次初始化失败后的恢复办法写在 `deploy/README.md`。
+- 代码到 VPS 的方式（已定）：在 VPS 上把本仓库克隆到 `/opt/webhook-hub`，`infra` 直接从 `deploy/infra/` 运行，真实 `.env` 放在同一目录（被 `.gitignore` 忽略，权限 600），不另存一份拷贝，所以 VPS 不会和仓库悄悄不一致；只跟 `main`，用 `git pull --ff-only` 更新。Caddyfile 是单文件挂载，改了之后要重建 Caddy 容器（这点是推断，未实测）。
 - 可观察性：结构化日志、`/healthz`、简单 `/metrics`。
 - 公网入口防护：`/webhooks/*` 限制 body 大小（如 1 MB）并限流，验签失败返回 401 且不落 payload。
 - 网络暴露：只有 Caddy 监听 80/443；Postgres 和 Node 服务只在 Compose 内部网络，不映射宿主端口；SSH 保持仅密钥登录。
@@ -40,7 +42,7 @@
 ## 待定
 
 - 查询层：目前骨架直接用 `pg` 加手写 SQL 迁移（`migrations/*.sql` 加极简迁移器）。是否引入 Drizzle（自带 drizzle-kit，招聘需求常见）或 Kysely，等写到只读 API 和 worker、查询变多时再定。
-- Compose 布局：Caddy 和 Postgres 是 webhook-hub 与 DealWatch 共用的基础设施。**已定**：VPS 上单独一个 `infra` compose（caddy + postgres），各项目 compose 只含自己的服务；`infra` 的配置放在 webhook-hub 仓库的 `deploy/infra/` 下，等 DealWatch 加入时再决定是否拆出去。网络分两个：`edge`（Caddy 和各应用，Caddy 往应用转发）和 `db`（Postgres 和各应用，`internal`，无出站路由），Caddy 不在 `db` 上，面向互联网的容器够不到数据库（PR #5 的 review 指出原先的单一 `edge` 太平）。每个项目一个数据库和角色，并且要 `REVOKE CONNECT ON DATABASE ... FROM PUBLIC`：本地测试发现 PostgreSQL 默认允许任何角色连任何数据库，不撤销的话"每个项目独立数据库"在连接层并不成立。初始化脚本只在数据目录为空时运行一次，之后新增项目的库要手工创建，步骤和第一次初始化失败后的恢复办法写在 `deploy/README.md`。
+- 多个项目共用一个主机名时怎么分发：DuckDNS 的子域名只有一层，所以要么用路径前缀（`/webhook-hub/...`），要么每个项目各注册一个 DuckDNS 名字。现在只有 webhook-hub，放在根路径；等 DealWatch 加入时再定。（已定的 Compose 布局见"关键设计"。）
 
 ## Tooling 迁移（来自 badminton-club-app）
 

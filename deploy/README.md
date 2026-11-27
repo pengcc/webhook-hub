@@ -9,8 +9,12 @@ files on the VPS and never enter this repository.
 
 | Path | Contents |
 | --- | --- |
-| `/opt/infra` | a copy of `deploy/infra/` plus a real `.env` |
-| `/opt/webhook-hub` | the application compose file, added in a later step |
+| `/opt/webhook-hub` | a clone of this repository, branch `main`, updated with `git pull --ff-only` |
+| `/opt/webhook-hub/deploy/infra/.env` | the real secrets for infra: ignored by git, mode 600, never committed |
+
+There is no second copy of the deployment files: infra runs straight from the
+clone, so the VPS cannot drift from the repository and only reviewed `main`
+runs. The application's own compose file will live in the same clone.
 
 ## infra
 
@@ -53,15 +57,39 @@ the name the Caddyfile forwards to).
 
 ### First start
 
-1. Copy `deploy/infra/` to `/opt/infra` on the VPS.
-2. Create `/opt/infra/.env` from `.env.example` with real passwords
-   (`openssl rand -base64 24`). Keep it readable by the owner only.
+1. Clone the repository (the repository is public, so no credentials are
+   needed). Check `git --version` first and install git with apt if it is
+   missing:
+
+   ```bash
+   sudo mkdir -p /opt/webhook-hub && sudo chown "$USER": /opt/webhook-hub
+   git clone https://github.com/pengcc/webhook-hub.git /opt/webhook-hub
+   ```
+
+2. In `/opt/webhook-hub/deploy/infra`, create `.env` from `.env.example` with
+   real passwords (`openssl rand -base64 24`) and restrict it with
+   `chmod 600 .env`.
 3. Optional dry run of certificate issuance: set `ACME_CA` in `.env` to the
    Let's Encrypt staging directory, start, check, then remove it and recreate
    the Caddy container. Staging certificates are not trusted by browsers.
-4. From `/opt/infra`: `sudo docker compose up -d`.
+4. From `/opt/webhook-hub/deploy/infra`: `sudo docker compose up -d`.
 5. Check: `sudo docker compose ps`, and `curl -I https://lab-2026.duckdns.org`.
-   Until the application runs, Caddy answers 502 with a valid certificate.
+   Until the application runs, Caddy is expected to answer 502 once it has a
+   certificate (expected, not yet confirmed).
+
+### Updating
+
+```bash
+cd /opt/webhook-hub && git pull --ff-only
+cd deploy/infra && sudo docker compose up -d
+```
+
+If the Caddyfile changed, also run `sudo docker compose up -d --force-recreate
+caddy`: it is bind-mounted as a single file, and git replaces files by writing
+a new one, so a running Caddy can keep reading the old one.
+
+Never run `git clean -x` in the clone: it deletes git-ignored files, including
+`.env`.
 
 The hostname is set in `infra/Caddyfile`. Changing it later means editing that
 file and the dashboard's `VITE_API_BASE`; the certificate is issued again.
@@ -92,7 +120,7 @@ Check `sudo docker compose logs postgres`. A failed init script is not run
 again: after a restart Postgres starts normally on the partly initialised data
 directory, without the role and database, and the application reports
 "password authentication failed". While the volume holds no data you care
-about, start over from `/opt/infra`:
+about, start over from `/opt/webhook-hub/deploy/infra`:
 
 ```bash
 sudo docker compose down
@@ -109,5 +137,7 @@ sudo docker compose up -d
 - Not covered yet: the application compose file, a read-only database role for
   the dashboard API, and backups (`pg_dump` with a restore drill).
 - Verified locally on a throwaway stack: the network split, the init script and
-  the add-a-database procedure (without `sudo`). Not verified: the commands on
-  the VPS, including `sudo --preserve-env`.
+  the add-a-database procedure (without `sudo`), and the Caddyfile default and
+  override for `ACME_CA`. Not verified: the commands on the VPS (including
+  `git clone` and `sudo --preserve-env`) and the single-file bind mount
+  behaviour after a `git pull`.
