@@ -8,4 +8,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
   -v password="$WEBHOOK_HUB_DB_PASSWORD" <<'SQL'
 CREATE ROLE webhook_hub LOGIN PASSWORD :'password';
 CREATE DATABASE webhook_hub OWNER webhook_hub;
+-- Every role may connect to every database by default. Keep this one to its
+-- owner (and superusers) so another project's role cannot even log in to it.
+REVOKE CONNECT ON DATABASE webhook_hub FROM PUBLIC;
 SQL

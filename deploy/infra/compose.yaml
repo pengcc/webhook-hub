@@ -1,8 +1,11 @@
 # Shared infrastructure on the VPS: Caddy (TLS and reverse proxy) and Postgres.
-# Projects join the `edge` network from their own compose files and are routed
-# by the Caddyfile. Run from /opt/infra on the VPS with a .env next to this
-# file (copy .env.example, fill in real values; the real file is never
-# committed). See ../README.md.
+# Projects join two networks from their own compose files: `edge` to be routed
+# by the Caddyfile, and `db` to reach Postgres. Caddy is not on `db`, so the
+# internet-facing container cannot reach the database.
+#
+# Run from /opt/infra on the VPS with a .env next to this file (copy
+# .env.example, fill in real values; the real file is never committed).
+# See ../README.md.
 name: infra
 
 x-logging: &logging
@@ -45,8 +48,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
-    # No published ports: only containers on the edge network can reach it.
-    networks: [edge]
+    # No published ports, and only containers on the db network can reach it.
+    networks: [db]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
@@ -56,9 +59,15 @@ services:
     logging: *logging
 
 networks:
+  # Caddy and the applications it forwards to.
   edge:
     # A fixed name so project compose files can join it as an external network.
     name: edge
+  # Postgres and the applications that use it. Internal: it has no route out of
+  # the host, and Caddy is not on it.
+  db:
+    name: db
+    internal: true
 
 volumes:
   caddy_data:

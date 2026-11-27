@@ -40,7 +40,7 @@
 ## 待定
 
 - 查询层：目前骨架直接用 `pg` 加手写 SQL 迁移（`migrations/*.sql` 加极简迁移器）。是否引入 Drizzle（自带 drizzle-kit，招聘需求常见）或 Kysely，等写到只读 API 和 worker、查询变多时再定。
-- Compose 布局：Caddy 和 Postgres 是 webhook-hub 与 DealWatch 共用的基础设施。建议 VPS 上单独一个 `infra` compose（caddy + postgres + 共享外部网络 `edge`），各项目 compose 只含自己的服务并接入该网络；`infra` 的配置先放在 webhook-hub 仓库的 `deploy/infra/` 下，等 DealWatch 加入时再决定是否拆出去。
+- Compose 布局：Caddy 和 Postgres 是 webhook-hub 与 DealWatch 共用的基础设施。**已定**：VPS 上单独一个 `infra` compose（caddy + postgres），各项目 compose 只含自己的服务；`infra` 的配置放在 webhook-hub 仓库的 `deploy/infra/` 下，等 DealWatch 加入时再决定是否拆出去。网络分两个：`edge`（Caddy 和各应用，Caddy 往应用转发）和 `db`（Postgres 和各应用，`internal`，无出站路由），Caddy 不在 `db` 上，面向互联网的容器够不到数据库（PR #5 的 review 指出原先的单一 `edge` 太平）。每个项目一个数据库和角色，并且要 `REVOKE CONNECT ON DATABASE ... FROM PUBLIC`：本地测试发现 PostgreSQL 默认允许任何角色连任何数据库，不撤销的话"每个项目独立数据库"在连接层并不成立。初始化脚本只在数据目录为空时运行一次，之后新增项目的库要手工创建，步骤和第一次初始化失败后的恢复办法写在 `deploy/README.md`。
 
 ## Tooling 迁移（来自 badminton-club-app）
 
@@ -91,7 +91,7 @@
 先打通端到端的最小骨架，尽早验证还没核实的部署链路（DuckDNS + Caddy 证书 + 防火墙），再往里加功能。
 
 1. 最小骨架（本地）：Fastify 服务，`/healthz` 加 `POST /webhooks/shopify`（验签 + 幂等入库），一条迁移，一组测试；Compose 本地能跑。
-2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。
+2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。进度（2026-11-27）：OCI 安全列表已放行 TCP 80/443（控制台截图确认）；主机 iptables 在 REJECT 之前插入了 80/443 的 ACCEPT，并用 `netfilter-persistent save` 写入 `/etc/iptables/rules.v4`（读回文件确认，规则文件与装前生效的规则一致）；Docker Engine 29.10.1 和 Compose v5.8.1 已从官方 apt 源安装（arm64），`hello-world` 通过，装后 INPUT 链没变；DuckDNS 子域名 `lab-2026.duckdns.org` 已注册，`dig` 确认解析到 `152.70.17.121`（注意：DuckDNS 创建时会自动填入操作者当前的公网 IP，必须改成 VPS 的地址，否则会公开自己的出口 IP）；`infra` 的配置已写好（`deploy/infra/`，PR #5）。未完成、未验证：把 `infra` 放到 VPS 并启动、Caddy 实际签发证书、从外网访问 80/443、应用的 compose、`TRUST_PROXY=1` 在 Caddy 之后的实际行为。
 3. 部署骨架：创建 GitHub 仓库并推送，在 VPS 上部署，用模拟发送器从外网打一次。
 4. 功能补齐：worker、重试、死信（已完成，见上）；只读 API 已完成（`src/read-api.ts`：`GET /events` 按 id 倒序、游标分页、可按 `status`/`topic` 过滤；`GET /events/:id`；`GET /stats` 各状态计数）；CORS 和限流已完成（见下）；接下来：`/metrics`。API 响应不包含 `payload`，列表和详情只返回投递元数据和处理状态（这是为了公网接口不暴露订单内容，待确认）；也不返回 `last_error` 原文（可能含下游地址等内部信息），只给 `has_error` 布尔值。`/stats` 要全表计数，所以在内存里缓存 5 秒（并发请求共享一次查询，失败不缓存）；所有 5xx 统一返回 `{"error":"internal error"}` 并带 `Cache-Control: no-store`（Fastify 会保留抛错前已设置的头，不覆盖的话失败的 `/stats` 会带着 `public, max-age` 被代理缓存），错误详情只写日志。已知未处理：客户端 `max-age` 不扣除服务端缓存已用的时间，看板最多可能看到约两倍窗口（约 10 秒）前的数据；全局错误处理器也改变了 webhook 路由 4xx 响应体的形状（只剩 `error` 字段）。已知未做：读接口仍用读写连接池（原计划是只读角色）；按 `status`/`topic` 筛选没有专用索引。
 
