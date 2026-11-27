@@ -187,23 +187,71 @@ is known.
    `docker compose up -d` without it would use the tag `unknown`):
 
    ```bash
+   cd /opt/webhook-hub/deploy/webhook-hub
    sudo env SOURCE_REVISION="$(git rev-parse --short HEAD)" docker compose up -d --build
    ```
 
+   Run it in this directory: `git rev-parse` fails outside the repository, and
+   Compose needs the compose file.
+
 4. Check: `sudo docker compose ps` shows `healthy`, and
    `curl -sS https://lab-2026.duckdns.org/healthz` answers `{"status":"ok"}`.
-5. Check that the rate limit sees each visitor's real address, not Caddy's. From
-   your own machine, send 65 requests:
+   The service log (`sudo docker compose logs webhook-hub`) shows `migrations
+   applied` and `Server listening`.
+5. Check that the rate limit sees each visitor's real address, not Caddy's.
+   Request `/events` once from your own machine
+   (`curl -sS https://lab-2026.duckdns.org/events`), then on the VPS read the
+   last such log line:
 
    ```bash
-   for i in $(seq 65); do curl -s -o /dev/null -w '%{http_code}\n' https://lab-2026.duckdns.org/events; done | sort | uniq -c
+   cd /opt/webhook-hub/deploy/webhook-hub && sudo docker compose logs --no-log-prefix webhook-hub | grep '"url":"/events"' | tail -1
    ```
 
-   Expect about 60 answers of 200 and the rest 429. Then, within the same
-   minute, one request from a different network (for example a phone on mobile
-   data) must still answer 200. If it answers 429, every visitor shares one
-   bucket: the app sees Caddy's address, so do not give out the dashboard until
+   `remoteAddress` must be your machine's public address. An address starting
+   with `172.` is Docker's bridge: the app sees Caddy's address, every visitor
+   shares one rate-limit bucket, and the dashboard must not be given out until
    that is fixed.
+
+### Test delivery
+
+A signed test request checks the whole path (signature, idempotent storage,
+the worker, the read API) without a Shopify store. The secret stays on the VPS:
+it is read from `.env` and never printed. The data is synthetic. `--resolve`
+sends the request to Caddy on this machine, so it still goes through TLS and
+the proxy without the VPS having to reach its own public address. It leaves one
+test event in the database, which a dashboard will show. The script makes a new
+`X-Shopify-Webhook-Id` for every run, because a repeated one is stored only
+once (step 2 below repeats it on purpose).
+
+The secret goes to `openssl` as an argument, so another local user could read
+it from the process list while the command runs. That is acceptable on this
+single-user VPS with the random test secret; once `.env` holds a real Shopify
+secret, do not copy this pattern onto a shared host.
+
+```bash
+cd /opt/webhook-hub/deploy/webhook-hub
+SECRET=$(grep '^SHOPIFY_WEBHOOK_SECRET=' .env | cut -d= -f2)
+BODY='{"id":1001,"note":"synthetic test order"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -binary | base64)
+URL=https://lab-2026.duckdns.org/webhooks/shopify
+ID=vps-test-$(date +%s)
+send() { curl -sS -m 15 --resolve lab-2026.duckdns.org:443:127.0.0.1 -w ' http=%{http_code}\n' -X POST "$URL" -H 'Content-Type: application/json' -H "X-Shopify-Hmac-Sha256: $1" -H 'X-Shopify-Topic: orders/create' -H "X-Shopify-Webhook-Id: $ID" -H 'X-Shopify-Shop-Domain: demo.myshopify.com' --data-binary "$BODY"; }
+echo "0 stats before:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats; echo
+echo "1 valid:";           send "$SIG"
+echo "2 same again:";      send "$SIG"
+echo "3 wrong signature:"; send "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sleep 6
+echo "4 events (newest first; this run's id is $ID):"; curl -sS -m 15 https://lab-2026.duckdns.org/events | cut -c1-400
+echo; echo "5 stats after:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats
+unset SECRET SIG ID
+```
+
+Expected: `accepted` (200), `duplicate` (200), `invalid signature` (401, nothing
+stored). Then the first item of `/events` has this run's id as `event_id`, topic
+`orders/create` and status `done` (give it a few seconds if it is still
+`pending`), and `total` and `done` in step 5 are each one higher than in
+step 0. The pause is 6 seconds because `/stats` is served from memory for 5
+seconds; with a shorter pause step 5 can repeat the numbers of step 0.
 
 ### Updating
 
@@ -250,8 +298,18 @@ webhook-hub:<old-tag>` once you no longer need them.
   limit (60 allowed, then 429) with no proxy warning in the log. Also locally:
   the image tag and the revision label follow `SOURCE_REVISION` (two builds
   gave two tags with their own labels, and `unknown` without it).
-- Not verified: any of it on the VPS (the image build on arm64 with the VPS's
-  memory, the `.env` commands, `sudo env SOURCE_REVISION=...`, the rollback
-  and the real-address check in step 5 above), the real Shopify signature
-  header against a Shopify store, and `TRUST_PROXY=1` behind the production
-  Caddy rather than a local one.
+- Verified on the VPS (2026-11-27): First start steps 1 to 5 and the test
+  delivery. The image built on arm64 in about 27 seconds as
+  `webhook-hub:<short SHA>`, the container became healthy, the migrations
+  applied over the `db` network, `/healthz`, `/events` and `/stats` answered 200
+  from outside with a valid certificate, and the log showed a client's real
+  address behind the production Caddy (`TRUST_PROXY=1` works for IPv4). The
+  test delivery gave `accepted`, `duplicate` and 401 for a wrong signature, and
+  the worker finished the event in under 100 ms. Step 3 failed once with `fatal:
+  not a git repository`, most likely because it ran outside the repository (not
+  confirmed); it now starts with the `cd`.
+- Not verified: the rollback and the image cleanup commands, IPv6 clients (the
+  hostname has only an A record, and how Docker passes an IPv6 source address
+  is untested), whether both containers come back after a reboot, memory use
+  under load against the 256 MB limit, and the real Shopify signature header
+  against a Shopify store.
