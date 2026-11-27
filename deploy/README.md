@@ -11,10 +11,11 @@ files on the VPS and never enter this repository.
 | --- | --- |
 | `/opt/webhook-hub` | a clone of this repository, branch `main`, updated with `git pull --ff-only` |
 | `/opt/webhook-hub/deploy/infra/.env` | the real secrets for infra: ignored by git, mode 600, never committed |
+| `/opt/webhook-hub/deploy/webhook-hub/.env` | the real secrets for the application, same rules |
 
-There is no second copy of the deployment files: infra runs straight from the
-clone, so the VPS cannot drift from the repository and only reviewed `main`
-runs. The application's own compose file will live in the same clone.
+There is no second copy of the deployment files: infra and the application run
+straight from the clone, so the VPS cannot drift from the repository and only
+reviewed `main` runs.
 
 ## infra
 
@@ -136,8 +137,8 @@ sudo docker compose up -d
   later does not change the role's password; do that with `ALTER ROLE`.
 - Do not run `netfilter-persistent save` after Docker is installed: it would
   write Docker's own rules into `/etc/iptables/rules.v4`.
-- Not covered yet: the application compose file, a read-only database role for
-  the dashboard API, and backups (`pg_dump` with a restore drill).
+- Not covered yet: a read-only database role for the dashboard API, and
+  backups (`pg_dump` with a restore drill).
 - Verified locally on a throwaway stack: the network split, the init script and
   the add-a-database procedure (without `sudo`), and the Caddyfile default and
   override for `ACME_CA`.
@@ -151,3 +152,106 @@ sudo docker compose up -d
 - Not verified: the add-a-database procedure on the VPS (`sudo
   --preserve-env`), and the single-file bind mount behaviour after a
   `git pull`.
+
+## webhook-hub
+
+`webhook-hub/compose.yaml` runs the application. It needs `infra` running first:
+it joins the external networks `edge` (Caddy forwards to the service name
+`webhook-hub`, port 3000) and `db` (Postgres, host `postgres`). It publishes no
+port, so the only way in is through Caddy. The image is built on the VPS from
+the clone's `Dockerfile`, so no registry is involved. The service applies the
+migrations in `migrations/` when it starts.
+
+Settings (see `webhook-hub/.env.example`): the database password and the
+Shopify webhook secret come from `.env`. `TRUST_PROXY=1` is set in the compose
+file because exactly one proxy, Caddy, is in front: the rate limit then keys on
+the address Caddy saw and ignores an `X-Forwarded-For` value the client wrote.
+`CORS_ALLOWED_ORIGINS` is empty (no CORS headers) until the dashboard's origin
+is known.
+
+### First start
+
+1. `infra` is running (`sudo docker compose ps` in `deploy/infra`).
+2. In `/opt/webhook-hub/deploy/webhook-hub`, create `.env`. The database
+   password is copied from the infra `.env` without printing it, and the
+   Shopify secret is a random test value until there is a Shopify store:
+
+   ```bash
+   umask 077
+   grep '^WEBHOOK_HUB_DB_PASSWORD=' ../infra/.env > .env
+   printf 'SHOPIFY_WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
+   ```
+
+3. Build and start. The image is tagged with the current commit and carries it
+   as its revision label; always pass `SOURCE_REVISION` like this (a plain
+   `docker compose up -d` without it would use the tag `unknown`):
+
+   ```bash
+   sudo env SOURCE_REVISION="$(git rev-parse --short HEAD)" docker compose up -d --build
+   ```
+
+4. Check: `sudo docker compose ps` shows `healthy`, and
+   `curl -sS https://lab-2026.duckdns.org/healthz` answers `{"status":"ok"}`.
+5. Check that the rate limit sees each visitor's real address, not Caddy's. From
+   your own machine, send 65 requests:
+
+   ```bash
+   for i in $(seq 65); do curl -s -o /dev/null -w '%{http_code}\n' https://lab-2026.duckdns.org/events; done | sort | uniq -c
+   ```
+
+   Expect about 60 answers of 200 and the rest 429. Then, within the same
+   minute, one request from a different network (for example a phone on mobile
+   data) must still answer 200. If it answers 429, every visitor shares one
+   bucket: the app sees Caddy's address, so do not give out the dashboard until
+   that is fixed.
+
+### Updating
+
+```bash
+cd /opt/webhook-hub && git pull --ff-only
+cd deploy/webhook-hub
+sudo env SOURCE_REVISION="$(git rev-parse --short HEAD)" docker compose up -d --build
+```
+
+### Rolling back
+
+Every build keeps its own tag, so the previous image is still there. List them
+with `sudo docker images webhook-hub`, then start the one you want. Keep
+`--no-build`: without it, a tag that does not exist (a typo, or an image you
+already removed) makes Compose build the current checkout and tag it with that
+name, so you would run the current code under an old revision's label. With it,
+a missing image is an error:
+
+```bash
+sudo env SOURCE_REVISION=<previous-tag> docker compose up -d --no-build
+```
+
+A rollback swaps only the image. The service applies `migrations/` when it
+starts and never undoes them, and the compose file and its settings come from
+the current checkout, not from the old revision. So it is safe only across
+releases that added no migration, or only additive ones; an older image running
+against a newer schema can fail. Otherwise fix forward, or restore a backup
+(not set up yet).
+
+To see which commit a running container was built from:
+`sudo docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' webhook-hub-webhook-hub-1`.
+
+Images pile up with every update; remove old ones with `sudo docker image rm
+webhook-hub:<old-tag>` once you no longer need them.
+
+### Notes
+
+- Verified locally on a throwaway stack (networks `edge` and `db`, a temporary
+  Postgres, a Caddy in front, test values): the required-variable errors, the
+  image build, a healthy container, the migrations applying over the `db`
+  network with the password from `PGPASSWORD`, no published ports, the memory
+  limit and restart policy, `/healthz` and `/events` through the proxy, and
+  that 63 requests with 63 different spoofed `X-Forwarded-For` values hit the
+  limit (60 allowed, then 429) with no proxy warning in the log. Also locally:
+  the image tag and the revision label follow `SOURCE_REVISION` (two builds
+  gave two tags with their own labels, and `unknown` without it).
+- Not verified: any of it on the VPS (the image build on arm64 with the VPS's
+  memory, the `.env` commands, `sudo env SOURCE_REVISION=...`, the rollback
+  and the real-address check in step 5 above), the real Shopify signature
+  header against a Shopify store, and `TRUST_PROXY=1` behind the production
+  Caddy rather than a local one.
