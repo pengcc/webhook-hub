@@ -1,0 +1,75 @@
+# Shared infrastructure on the VPS: Caddy (TLS and reverse proxy) and Postgres.
+# Projects join two networks from their own compose files: `edge` to be routed
+# by the Caddyfile, and `db` to reach Postgres. Caddy is not on `db`, so the
+# internet-facing container cannot reach the database.
+#
+# Run from /opt/webhook-hub/deploy/infra on the VPS (a clone of this
+# repository) with a .env next to this file (copy .env.example, fill in real
+# values; the real file is never committed). See ../README.md.
+name: infra
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      # Only TCP 80 (ACME HTTP-01 and redirect) and 443 are open in the OCI
+      # security list and the host firewall. UDP 443 (HTTP/3) is not.
+      - '80:80'
+      - '443:443'
+    environment:
+      # Set ACME_CA to the Let's Encrypt staging directory to test issuance
+      # without touching production rate limits.
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account live here: keep this volume.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    mem_limit: 64m
+    logging: *logging
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Used by initdb/10-webhook-hub.sh, which runs only on an empty data
+      # directory.
+      WEBHOOK_HUB_DB_PASSWORD: ${WEBHOOK_HUB_DB_PASSWORD:?set WEBHOOK_HUB_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    # No published ports, and only containers on the db network can reach it.
+    networks: [db]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    logging: *logging
+
+networks:
+  # Caddy and the applications it forwards to.
+  edge:
+    # A fixed name so project compose files can join it as an external network.
+    name: edge
+  # Postgres and the applications that use it. Internal: it has no route out of
+  # the host, and Caddy is not on it.
+  db:
+    name: db
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
