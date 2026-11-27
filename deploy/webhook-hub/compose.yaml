@@ -1,0 +1,54 @@
+# The webhook-hub application. Caddy and Postgres are shared infrastructure in
+# ../infra, which must be running first: this file joins its `edge` network
+# (Caddy forwards requests here) and its `db` network (Postgres).
+#
+# Run from /opt/webhook-hub/deploy/webhook-hub on the VPS (a clone of this
+# repository) with a .env next to this file (copy .env.example, fill in real
+# values; the real file is never committed). See ../README.md.
+name: webhook-hub
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  # The service name is what ../infra/Caddyfile forwards to
+  # (reverse_proxy webhook-hub:3000) and is shared by every project on the edge
+  # network, so it must stay unique there.
+  webhook-hub:
+    build:
+      context: ../..
+    image: webhook-hub:local
+    restart: unless-stopped
+    environment:
+      # The password comes from PGPASSWORD (read by pg), so the URL stays free
+      # of credentials. It is the password of the webhook_hub role that
+      # ../infra/initdb created.
+      DATABASE_URL: postgres://webhook_hub@postgres:5432/webhook_hub
+      PGPASSWORD: ${WEBHOOK_HUB_DB_PASSWORD:?set WEBHOOK_HUB_DB_PASSWORD in .env}
+      SHOPIFY_WEBHOOK_SECRET: ${SHOPIFY_WEBHOOK_SECRET:?set SHOPIFY_WEBHOOK_SECRET in .env}
+      # Exactly one proxy (Caddy) sits in front: trust its X-Forwarded-For, and
+      # nothing the client wrote before it. Do not publish this container's port.
+      TRUST_PROXY: '1'
+      # Read API rate limit per client IP (the same as the built-in default,
+      # written out so the setting is visible).
+      RATE_LIMIT_MAX: '60'
+      RATE_LIMIT_WINDOW_SECONDS: '60'
+      # Origins of the dashboard allowed to call the read API, comma separated
+      # and without a path. Empty sends no CORS headers.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+    # No published ports: the only way in is through Caddy on the edge network.
+    # The image's own HEALTHCHECK probes /healthz.
+    networks: [edge, db]
+    mem_limit: 256m
+    logging: *logging
+
+networks:
+  edge:
+    name: edge
+    external: true
+  db:
+    name: db
+    external: true

@@ -11,10 +11,11 @@ files on the VPS and never enter this repository.
 | --- | --- |
 | `/opt/webhook-hub` | a clone of this repository, branch `main`, updated with `git pull --ff-only` |
 | `/opt/webhook-hub/deploy/infra/.env` | the real secrets for infra: ignored by git, mode 600, never committed |
+| `/opt/webhook-hub/deploy/webhook-hub/.env` | the real secrets for the application, same rules |
 
-There is no second copy of the deployment files: infra runs straight from the
-clone, so the VPS cannot drift from the repository and only reviewed `main`
-runs. The application's own compose file will live in the same clone.
+There is no second copy of the deployment files: infra and the application run
+straight from the clone, so the VPS cannot drift from the repository and only
+reviewed `main` runs.
 
 ## infra
 
@@ -136,8 +137,8 @@ sudo docker compose up -d
   later does not change the role's password; do that with `ALTER ROLE`.
 - Do not run `netfilter-persistent save` after Docker is installed: it would
   write Docker's own rules into `/etc/iptables/rules.v4`.
-- Not covered yet: the application compose file, a read-only database role for
-  the dashboard API, and backups (`pg_dump` with a restore drill).
+- Not covered yet: a read-only database role for the dashboard API, and
+  backups (`pg_dump` with a restore drill).
 - Verified locally on a throwaway stack: the network split, the init script and
   the add-a-database procedure (without `sudo`), and the Caddyfile default and
   override for `ACME_CA`.
@@ -151,3 +152,57 @@ sudo docker compose up -d
 - Not verified: the add-a-database procedure on the VPS (`sudo
   --preserve-env`), and the single-file bind mount behaviour after a
   `git pull`.
+
+## webhook-hub
+
+`webhook-hub/compose.yaml` runs the application. It needs `infra` running first:
+it joins the external networks `edge` (Caddy forwards to the service name
+`webhook-hub`, port 3000) and `db` (Postgres, host `postgres`). It publishes no
+port, so the only way in is through Caddy. The image is built on the VPS from
+the clone's `Dockerfile`, so no registry is involved. The service applies the
+migrations in `migrations/` when it starts.
+
+Settings (see `webhook-hub/.env.example`): the database password and the
+Shopify webhook secret come from `.env`. `TRUST_PROXY=1` is set in the compose
+file because exactly one proxy, Caddy, is in front: the rate limit then keys on
+the address Caddy saw and ignores an `X-Forwarded-For` value the client wrote.
+`CORS_ALLOWED_ORIGINS` is empty (no CORS headers) until the dashboard's origin
+is known.
+
+### First start
+
+1. `infra` is running (`sudo docker compose ps` in `deploy/infra`).
+2. In `/opt/webhook-hub/deploy/webhook-hub`, create `.env`. The database
+   password is copied from the infra `.env` without printing it, and the
+   Shopify secret is a random test value until there is a Shopify store:
+
+   ```bash
+   umask 077
+   grep '^WEBHOOK_HUB_DB_PASSWORD=' ../infra/.env > .env
+   printf 'SHOPIFY_WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
+   ```
+
+3. Build and start: `sudo docker compose up -d --build`.
+4. Check: `sudo docker compose ps` shows `healthy`, and
+   `curl -sS https://lab-2026.duckdns.org/healthz` answers `{"status":"ok"}`.
+
+### Updating
+
+```bash
+cd /opt/webhook-hub && git pull --ff-only
+cd deploy/webhook-hub && sudo docker compose up -d --build
+```
+
+### Notes
+
+- Verified locally on a throwaway stack (networks `edge` and `db`, a temporary
+  Postgres, a Caddy in front, test values): the required-variable errors, the
+  image build, a healthy container, the migrations applying over the `db`
+  network with the password from `PGPASSWORD`, no published ports, the memory
+  limit and restart policy, `/healthz` and `/events` through the proxy, and
+  that 63 requests with 63 different spoofed `X-Forwarded-For` values hit the
+  limit (60 allowed, then 429) with no proxy warning in the log.
+- Not verified: any of it on the VPS (the image build on arm64 with the VPS's
+  memory, and the `.env` commands above), the real Shopify signature header
+  against a Shopify store, and `TRUST_PROXY=1` behind the production Caddy
+  rather than a local one.
