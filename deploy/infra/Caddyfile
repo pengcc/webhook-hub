@@ -1,0 +1,15 @@
+{
+	# Let's Encrypt over HTTP-01 (needs TCP 80 reachable). The default is the
+	# production directory; compose can switch it to staging for a dry run.
+	acme_ca {$ACME_CA}
+}
+
+lab-2026.duckdns.org {
+	encode zstd gzip
+
+	# Caddy resolves the upstream when a request arrives, so it starts and gets
+	# its certificate even before the app container exists (502 until then).
+	# It sets X-Forwarded-For to the client address, which the app reads with
+	# TRUST_PROXY=1.
+	reverse_proxy webhook-hub:3000
+}
