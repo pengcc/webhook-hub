@@ -216,12 +216,22 @@ sudo env SOURCE_REVISION="$(git rev-parse --short HEAD)" docker compose up -d --
 ### Rolling back
 
 Every build keeps its own tag, so the previous image is still there. List them
-with `sudo docker images webhook-hub`, then start the one you want, without
-`--build`:
+with `sudo docker images webhook-hub`, then start the one you want. Keep
+`--no-build`: without it, a tag that does not exist (a typo, or an image you
+already removed) makes Compose build the current checkout and tag it with that
+name, so you would run the current code under an old revision's label. With it,
+a missing image is an error:
 
 ```bash
-sudo env SOURCE_REVISION=<previous-tag> docker compose up -d
+sudo env SOURCE_REVISION=<previous-tag> docker compose up -d --no-build
 ```
+
+A rollback swaps only the image. The service applies `migrations/` when it
+starts and never undoes them, and the compose file and its settings come from
+the current checkout, not from the old revision. So it is safe only across
+releases that added no migration, or only additive ones; an older image running
+against a newer schema can fail. Otherwise fix forward, or restore a backup
+(not set up yet).
 
 To see which commit a running container was built from:
 `sudo docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' webhook-hub-webhook-hub-1`.
