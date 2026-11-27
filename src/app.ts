@@ -1,4 +1,9 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyServerOptions,
+} from 'fastify';
 import type { Pool } from 'pg';
 import type { Config } from './config.js';
 import { registerReadApi } from './read-api.js';
@@ -8,10 +13,26 @@ const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 
 type AppDeps = {
   pool: Pool;
-  config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'>;
+  config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'> &
+    Partial<
+      Pick<
+        Config,
+        | 'CORS_ALLOWED_ORIGINS'
+        | 'RATE_LIMIT_MAX'
+        | 'RATE_LIMIT_WINDOW_SECONDS'
+        | 'TRUST_PROXY'
+      >
+    >;
   /** See registerReadApi. Tests set 0 to see fresh counts. */
   statsCacheMs?: number;
 };
+
+/** A hop count n trusts the n proxies closest to the app (same rule as proxy-addr). */
+function trustProxyOption(value: boolean | number | string[]) {
+  return typeof value === 'number'
+    ? (_address: string, hop: number) => hop < value
+    : value;
+}
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -22,8 +43,9 @@ export function buildApp({
   config,
   statsCacheMs,
 }: AppDeps): FastifyInstance {
-  const app = Fastify({
+  const options: FastifyServerOptions = {
     bodyLimit: MAX_BODY_BYTES,
+    trustProxy: trustProxyOption(config.TRUST_PROXY ?? false),
     logger: {
       level: config.LOG_LEVEL,
       // Never log signatures or payloads.
@@ -32,7 +54,32 @@ export function buildApp({
         'req.headers.authorization',
       ],
     },
+  };
+  const app = Fastify(options);
+
+  // Browsers may call the read API only from the configured origins; with none
+  // configured no CORS headers are sent at all.
+  const corsOrigins = config.CORS_ALLOWED_ORIGINS ?? [];
+  app.register(cors, {
+    origin: corsOrigins.length > 0 ? corsOrigins : false,
+    methods: ['GET', 'HEAD', 'OPTIONS'],
+    exposedHeaders: ['retry-after'],
+    maxAge: 600,
   });
+
+  // With the proxy untrusted every client shows up as the proxy's address and
+  // shares one rate limit bucket. A forwarded header with TRUST_PROXY=false
+  // means that is probably a misconfiguration, so say so once.
+  if (config.RATE_LIMIT_MAX !== undefined && !config.TRUST_PROXY) {
+    let warned = false;
+    app.addHook('onRequest', async (req) => {
+      if (warned || !req.headers['x-forwarded-for']) return;
+      warned = true;
+      app.log.warn(
+        'X-Forwarded-For received while TRUST_PROXY is false: every client behind the proxy shares one rate limit bucket. Set TRUST_PROXY=1 behind a single reverse proxy.'
+      );
+    });
+  }
 
   // Signature verification needs the exact bytes that were sent.
   app.addContentTypeParser(
@@ -118,7 +165,19 @@ export function buildApp({
       .send({ error: error instanceof Error ? error.message : 'bad request' });
   });
 
-  registerReadApi(app, pool, { statsCacheMs });
+  // Rate limiting is scoped to the read API: webhook deliveries come from the
+  // platform's shared addresses and are authenticated by signature instead.
+  // buildApp callers that omit RATE_LIMIT_MAX (tests) get no limiter.
+  app.register(async (scope) => {
+    const max = config.RATE_LIMIT_MAX;
+    if (max !== undefined) {
+      await scope.register(rateLimit, {
+        max,
+        timeWindow: (config.RATE_LIMIT_WINDOW_SECONDS ?? 60) * 1000,
+      });
+    }
+    registerReadApi(scope, pool, { statsCacheMs });
+  });
 
   return app;
 }
