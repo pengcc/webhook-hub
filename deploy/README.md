@@ -70,12 +70,14 @@ the name the Caddyfile forwards to).
    real passwords (`openssl rand -base64 24`) and restrict it with
    `chmod 600 .env`.
 3. Optional dry run of certificate issuance: set `ACME_CA` in `.env` to the
-   Let's Encrypt staging directory, start, check, then remove it and recreate
-   the Caddy container. Staging certificates are not trusted by browsers.
+   Let's Encrypt staging directory (append the line once: a duplicate is
+   harmless but untidy), start, check, then delete that line and run
+   `sudo docker compose up -d` again, which recreates only Caddy. Staging
+   certificates are not trusted by browsers.
 4. From `/opt/webhook-hub/deploy/infra`: `sudo docker compose up -d`.
 5. Check: `sudo docker compose ps`, and `curl -I https://lab-2026.duckdns.org`.
-   Until the application runs, Caddy is expected to answer 502 once it has a
-   certificate (expected, not yet confirmed).
+   Until the application runs, Caddy answers 502 once it has a certificate
+   (confirmed on the VPS), and `http://` redirects to https with a 308.
 
 ### Updating
 
@@ -138,6 +140,11 @@ sudo docker compose up -d
   the dashboard API, and backups (`pg_dump` with a restore drill).
 - Verified locally on a throwaway stack: the network split, the init script and
   the add-a-database procedure (without `sudo`), and the Caddyfile default and
-  override for `ACME_CA`. Not verified: the commands on the VPS (including
-  `git clone` and `sudo --preserve-env`) and the single-file bind mount
-  behaviour after a `git pull`.
+  override for `ACME_CA`.
+- Verified on the VPS (2026-11-27): the first-start steps above, including
+  `git clone`, the staging dry run, the switch to the production CA, a
+  certificate for `lab-2026.duckdns.org` and the 502 and 308 answers from
+  outside, and the init script's output (role, database, `REVOKE`).
+- Not verified: the add-a-database procedure on the VPS (`sudo
+  --preserve-env`), and the single-file bind mount behaviour after a
+  `git pull`.
