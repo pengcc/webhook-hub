@@ -24,3 +24,7 @@ dev_locals/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Linked from ~/Projects/agent-home (absolute symlinks, machine-local)
+/.claude/skills/
+/.agents/skills/
