@@ -36,7 +36,8 @@
 
 - 已核实：OCI Cost Analysis 截至 2026-11-15 各项（Compute、Block Storage、Object Storage、VCN、Telemetry）均为 €0.00；账单数据约有 24 小时延迟。
 - 已核实：`duckdns.org` 在 Public Suffix List 中，Let's Encrypt 限额按子域名独立计算；DuckDNS 官网当前可访问。`sslip.io` 不在该列表中，限额与其他用户共用，不作为首选。
-- 未核实：在本 VPS 上用 Caddy 实际签发 DuckDNS 证书（要等 80 端口放行后再试）；DuckDNS 长期稳定性（个人运营，无 SLA）；Shopify Partner / 开发商店当前条款（注册时以页面为准）；Shopify 真实投递的请求头是否与上述一致（目前只用本地签名请求测试过，要等开发商店或真实投递来验证）。
+- 已核实（2026-11-27）：在本 VPS 上起了 `infra`（Caddy + Postgres 17）。Caddy 先后从 Let's Encrypt staging 和正式环境为 `lab-2026.duckdns.org` 签发了证书（HTTP-01，日志里是多个地点的验证请求，说明 TCP 80 从公网可达）；从外网访问 `https://lab-2026.duckdns.org/` 证书校验通过，应用容器不存在时返回 502，`http://` 返回 308 跳转到 https；日志里出现过互联网扫描器经 HTTP/2 来的请求，说明 TCP 443 也可达。Postgres 初始化脚本只在首次启动运行一次，创建了 `webhook_hub` 角色和库并撤销了 PUBLIC 的 CONNECT，状态 `healthy`，没有发布端口。`deploy/README.md` 里克隆、staging 演练、启动和切换到正式环境的步骤在 VPS 上实际跑通；`.env` 一步实际是用 `openssl rand -hex 24` 生成的密码写入的，README 里写的 `-base64` 没在 VPS 上试过；切换时删掉 `.env` 里的 `ACME_CA` 再 `docker compose up -d`，只重建了 Caddy。
+- 未核实：DuckDNS 长期稳定性（个人运营，无 SLA）；Shopify Partner / 开发商店当前条款（注册时以页面为准）；Shopify 真实投递的请求头是否与上述一致（目前只用本地签名请求测试过，要等开发商店或真实投递来验证）。
 - 闲置回收：Always Free 的回收规则可能覆盖常驻的小服务，官方文档未确认 PAYG 是否豁免，不作保证。部署轻量服务本身不会让 CPU、网络、内存的第 95 百分位超过 20%，所以"尽快部署"不能当作防回收手段。缓解办法是整个环境写成 compose 加备份加 runbook，能在新实例上重建。
 
 ## 待定
@@ -93,7 +94,7 @@
 先打通端到端的最小骨架，尽早验证还没核实的部署链路（DuckDNS + Caddy 证书 + 防火墙），再往里加功能。
 
 1. 最小骨架（本地）：Fastify 服务，`/healthz` 加 `POST /webhooks/shopify`（验签 + 幂等入库），一条迁移，一组测试；Compose 本地能跑。
-2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。进度（2026-11-27）：OCI 安全列表已放行 TCP 80/443（控制台截图确认）；主机 iptables 在 REJECT 之前插入了 80/443 的 ACCEPT，并用 `netfilter-persistent save` 写入 `/etc/iptables/rules.v4`（读回文件确认，规则文件与装前生效的规则一致）；Docker Engine 29.10.1 和 Compose v5.8.1 已从官方 apt 源安装（arm64），`hello-world` 通过，装后 INPUT 链没变；DuckDNS 子域名 `lab-2026.duckdns.org` 已注册，`dig` 确认解析到 `152.70.17.121`（注意：DuckDNS 创建时会自动填入操作者当前的公网 IP，必须改成 VPS 的地址，否则会公开自己的出口 IP）；`infra` 的配置已写好（`deploy/infra/`，PR #5）。未完成、未验证：把 `infra` 放到 VPS 并启动、Caddy 实际签发证书、从外网访问 80/443、应用的 compose、`TRUST_PROXY=1` 在 Caddy 之后的实际行为。
+2. VPS 基础设施：装 Docker；放行 80/443（OCI Security List + iptables）；注册 DuckDNS；起 `infra`（Caddy + Postgres）；确认证书签发成功、`https://<名字>.duckdns.org/healthz` 可访问。进度（2026-11-27）：OCI 安全列表已放行 TCP 80/443（控制台截图确认）；主机 iptables 在 REJECT 之前插入了 80/443 的 ACCEPT，并用 `netfilter-persistent save` 写入 `/etc/iptables/rules.v4`（读回文件确认，规则文件与装前生效的规则一致）；Docker Engine 29.10.1 和 Compose v5.8.1 已从官方 apt 源安装（arm64），`hello-world` 通过，装后 INPUT 链没变；DuckDNS 子域名 `lab-2026.duckdns.org` 已注册，`dig` 确认解析到 `152.70.17.121`（注意：DuckDNS 创建时会自动填入操作者当前的公网 IP，必须改成 VPS 的地址，否则会公开自己的出口 IP）；`infra` 的配置已写好（`deploy/infra/`，PR #5），并已在 VPS 上启动：证书签发成功，外网访问 80/443 正常（细节见"已核实 / 未核实"）。未完成、未验证：应用的 compose、`TRUST_PROXY=1` 在 Caddy 之后的实际行为、Caddyfile 改动后单文件挂载的表现、README 里"新增项目数据库"流程（含 `sudo --preserve-env`）。
 3. 部署骨架：创建 GitHub 仓库并推送，在 VPS 上部署，用模拟发送器从外网打一次。
 4. 功能补齐：worker、重试、死信（已完成，见上）；只读 API 已完成（`src/read-api.ts`：`GET /events` 按 id 倒序、游标分页、可按 `status`/`topic` 过滤；`GET /events/:id`；`GET /stats` 各状态计数）；CORS 和限流已完成（见下）；接下来：`/metrics`。API 响应不包含 `payload`，列表和详情只返回投递元数据和处理状态（这是为了公网接口不暴露订单内容，待确认）；也不返回 `last_error` 原文（可能含下游地址等内部信息），只给 `has_error` 布尔值。`/stats` 要全表计数，所以在内存里缓存 5 秒（并发请求共享一次查询，失败不缓存）；所有 5xx 统一返回 `{"error":"internal error"}` 并带 `Cache-Control: no-store`（Fastify 会保留抛错前已设置的头，不覆盖的话失败的 `/stats` 会带着 `public, max-age` 被代理缓存），错误详情只写日志。已知未处理：客户端 `max-age` 不扣除服务端缓存已用的时间，看板最多可能看到约两倍窗口（约 10 秒）前的数据；全局错误处理器也改变了 webhook 路由 4xx 响应体的形状（只剩 `error` 字段）。已知未做：读接口仍用读写连接池（原计划是只读角色）；按 `status`/`topic` 筛选没有专用索引。
 
