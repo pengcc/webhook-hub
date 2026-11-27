@@ -1,6 +1,9 @@
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyServerOptions,
+} from 'fastify';
 import type { Pool } from 'pg';
 import type { Config } from './config.js';
 import { registerReadApi } from './read-api.js';
@@ -24,6 +27,13 @@ type AppDeps = {
   statsCacheMs?: number;
 };
 
+/** A hop count n trusts the n proxies closest to the app (same rule as proxy-addr). */
+function trustProxyOption(value: boolean | number | string[]) {
+  return typeof value === 'number'
+    ? (_address: string, hop: number) => hop < value
+    : value;
+}
+
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -33,9 +43,9 @@ export function buildApp({
   config,
   statsCacheMs,
 }: AppDeps): FastifyInstance {
-  const app = Fastify({
+  const options: FastifyServerOptions = {
     bodyLimit: MAX_BODY_BYTES,
-    trustProxy: config.TRUST_PROXY ?? false,
+    trustProxy: trustProxyOption(config.TRUST_PROXY ?? false),
     logger: {
       level: config.LOG_LEVEL,
       // Never log signatures or payloads.
@@ -44,7 +54,8 @@ export function buildApp({
         'req.headers.authorization',
       ],
     },
-  });
+  };
+  const app = Fastify(options);
 
   // Browsers may call the read API only from the configured origins; with none
   // configured no CORS headers are sent at all.

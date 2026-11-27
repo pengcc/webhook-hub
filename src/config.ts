@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 function isOrigin(value: string): boolean {
@@ -6,6 +7,41 @@ function isOrigin(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+const PROXY_KEYWORDS = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+function isProxyEntry(entry: string): boolean {
+  if (PROXY_KEYWORDS.has(entry)) return true;
+  const [address = '', bits, extra] = entry.split('/');
+  const family = isIP(address);
+  if (family === 0 || extra !== undefined) return false;
+  if (bits === undefined) return true;
+  return /^\d{1,3}$/.test(bits) && Number(bits) <= (family === 4 ? 32 : 128);
+}
+
+const HOP_COUNT = /^[1-9]\d{0,2}$/;
+
+function proxyEntries(value: string): string[] {
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function isTrustProxy(value: string): boolean {
+  const v = value.trim();
+  if (v === 'true' || v === 'false' || HOP_COUNT.test(v)) return true;
+  const entries = proxyEntries(v);
+  return entries.length > 0 && entries.every(isProxyEntry);
+}
+
+function parseTrustProxy(value: string): boolean | number | string[] {
+  const v = value.trim();
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  if (HOP_COUNT.test(v)) return Number(v);
+  return proxyEntries(v);
 }
 
 const schema = z
@@ -44,12 +80,19 @@ const schema = z
     // Per client IP, read API only. Webhook deliveries are not rate limited.
     RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(60),
     RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
-    // Set to true only behind a reverse proxy (Caddy) that overwrites
-    // X-Forwarded-For; otherwise every client shares the proxy's address.
+    // Which proxies to believe about the client address (X-Forwarded-For).
+    // false: none (default). A hop count such as 1: trust only that many
+    // proxies in front of the app, so the address the nearest proxy saw is
+    // used and a client-supplied leftmost entry is ignored. A comma separated
+    // list of proxy addresses or CIDRs also works. true trusts every hop and
+    // takes the leftmost entry, which a client can forge: avoid it.
     TRUST_PROXY: z
-      .enum(['true', 'false'])
+      .string()
       .default('false')
-      .transform((v) => v === 'true'),
+      .refine(isTrustProxy, {
+        message: 'must be false, true, a hop count, or proxy addresses/CIDRs',
+      })
+      .transform(parseTrustProxy),
   })
   .superRefine((value, ctx) => {
     if (

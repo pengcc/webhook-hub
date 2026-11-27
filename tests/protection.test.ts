@@ -159,6 +159,71 @@ describe('rate limiting', () => {
   });
 });
 
+describe('rate limiting details', () => {
+  const limited = { ...base, RATE_LIMIT_MAX: 3, RATE_LIMIT_WINDOW_SECONDS: 60 };
+
+  async function codesFor(
+    config: Parameters<typeof buildApp>[0]['config'],
+    forwardedFor: (i: number) => string
+  ) {
+    const app = await appWith(config);
+    try {
+      const codes: number[] = [];
+      for (let i = 1; i <= 4; i++) {
+        const res = await app.inject({
+          method: 'GET',
+          url: '/events',
+          headers: { 'x-forwarded-for': forwardedFor(i) },
+        });
+        codes.push(res.statusCode);
+      }
+      return codes;
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('keeps the CORS headers on a 429 so the browser can read it', async () => {
+    const app = await appWith({
+      ...base,
+      CORS_ALLOWED_ORIGINS: [ALLOWED],
+      RATE_LIMIT_MAX: 1,
+      RATE_LIMIT_WINDOW_SECONDS: 60,
+    });
+    try {
+      const headers = { origin: ALLOWED };
+      await app.inject({ method: 'GET', url: '/events', headers });
+      const res = await app.inject({ method: 'GET', url: '/events', headers });
+
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['access-control-allow-origin']).toBe(ALLOWED);
+      expect(res.headers['access-control-expose-headers']).toContain(
+        'retry-after'
+      );
+      expect(res.headers['retry-after']).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('with a hop count, ignores a forged leftmost X-Forwarded-For entry', async () => {
+    // The proxy appended the real client address (203.0.113.7) on the right.
+    const codes = await codesFor(
+      { ...limited, TRUST_PROXY: 1 },
+      (i) => `198.51.100.${i}, 203.0.113.7`
+    );
+    expect(codes).toEqual([200, 200, 200, 429]);
+  });
+
+  it('with a hop count, still separates real clients by the address the proxy saw', async () => {
+    const codes = await codesFor(
+      { ...limited, TRUST_PROXY: 1 },
+      (i) => `198.51.100.9, 203.0.113.${i}`
+    );
+    expect(codes).toEqual([200, 200, 200, 200]);
+  });
+});
+
 describe('config', () => {
   const env = {
     DATABASE_URL: 'postgres://u@localhost/db',
@@ -177,6 +242,38 @@ describe('config', () => {
     expect(config.RATE_LIMIT_MAX).toBe(60);
     expect(config.TRUST_PROXY).toBe(false);
     expect(loadConfig(env).CORS_ALLOWED_ORIGINS).toEqual([]);
+  });
+
+  it('parses TRUST_PROXY as false, true, a hop count or a proxy list', () => {
+    const parse = (value?: string) =>
+      loadConfig({
+        ...env,
+        ...(value === undefined ? {} : { TRUST_PROXY: value }),
+      }).TRUST_PROXY;
+    expect(parse()).toBe(false);
+    expect(parse('false')).toBe(false);
+    expect(parse('true')).toBe(true);
+    expect(parse('1')).toBe(1);
+    expect(parse('172.18.0.0/16, 10.0.0.1')).toEqual([
+      '172.18.0.0/16',
+      '10.0.0.1',
+    ]);
+    expect(parse('loopback')).toEqual(['loopback']);
+  });
+
+  it('rejects an invalid TRUST_PROXY and names only the variable', () => {
+    for (const bad of [
+      '0',
+      'yes',
+      '999.1.1.1',
+      '10.0.0.0/33',
+      '10.0.0.1/8/8',
+      ',',
+    ]) {
+      expect(() => loadConfig({ ...env, TRUST_PROXY: bad }), bad).toThrow(
+        'TRUST_PROXY'
+      );
+    }
   });
 
   it('rejects origins with a path or a trailing slash and names only the variable', () => {
