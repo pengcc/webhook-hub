@@ -240,7 +240,7 @@ echo "0 stats before:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats; echo
 echo "1 valid:";           send "$SIG"
 echo "2 same again:";      send "$SIG"
 echo "3 wrong signature:"; send "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-sleep 3
+sleep 6
 echo "4 events (newest first; this run's id is $ID):"; curl -sS -m 15 https://lab-2026.duckdns.org/events | cut -c1-400
 echo; echo "5 stats after:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats
 unset SECRET SIG ID
@@ -250,7 +250,8 @@ Expected: `accepted` (200), `duplicate` (200), `invalid signature` (401, nothing
 stored). Then the first item of `/events` has this run's id as `event_id`, topic
 `orders/create` and status `done` (give it a few seconds if it is still
 `pending`), and `total` and `done` in step 5 are each one higher than in
-step 0.
+step 0. The pause is 6 seconds because `/stats` is served from memory for 5
+seconds; with a shorter pause step 5 can repeat the numbers of step 0.
 
 ### Updating
 
