@@ -1,3 +1,5 @@
+Read `~/Projects/agent-home/core.md` first (shared rules). Start sessions from this project directory.
+
 # AGENTS.md
 
 Entry point for agents working in this repository. Keep it short.
@@ -23,6 +25,17 @@ changes; do not duplicate it here.
 - `pnpm build` / `pnpm start` compile and run the service; `pnpm dev` watches.
 
 Requires Node 24 and pnpm 11 (see `mise.toml`, `packageManager`).
+
+## Project Profile
+
+- stack: Node 24, TypeScript, Postgres, pnpm 11
+- validate: `pnpm check && pnpm typecheck && pnpm test` (`pnpm db:up` first)
+- branch: `feat/<topic>` or `fix/<topic>`, based on `main`
+- pr: squash merge; merging always needs the user's approval of the exact command
+- plan-store: none (plans stay in the chat; decisions go to `docs/decisions.md`)
+- memory: none
+- worktrees: none
+- skills: plan, execute-plan, code-review
 
 ## Boundaries
 
