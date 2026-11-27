@@ -36,7 +36,7 @@ Requires Node 24 and pnpm 11 (see `mise.toml`, `packageManager`).
 - memory: none
 - worktrees: none
 - skills: plan, execute-plan, implementation-review
-- workflow: plan=when-risky, review=when-risky
+- workflow: plan=when-risky, review=always
 - risky-paths: migrations/**, deploy/**, .github/**
 
 ## Boundaries

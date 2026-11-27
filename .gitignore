@@ -28,3 +28,4 @@ dev_locals/
 # Linked from ~/Projects/agent-home (absolute symlinks, machine-local)
 /.claude/skills/
 /.agents/skills/
+/.agents/.agent-home.lock
