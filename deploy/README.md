@@ -182,16 +182,52 @@ is known.
    printf 'SHOPIFY_WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
    ```
 
-3. Build and start: `sudo docker compose up -d --build`.
+3. Build and start. The image is tagged with the current commit and carries it
+   as its revision label; always pass `SOURCE_REVISION` like this (a plain
+   `docker compose up -d` without it would use the tag `unknown`):
+
+   ```bash
+   sudo env SOURCE_REVISION="$(git rev-parse --short HEAD)" docker compose up -d --build
+   ```
+
 4. Check: `sudo docker compose ps` shows `healthy`, and
    `curl -sS https://lab-2026.duckdns.org/healthz` answers `{"status":"ok"}`.
+5. Check that the rate limit sees each visitor's real address, not Caddy's. From
+   your own machine, send 65 requests:
+
+   ```bash
+   for i in $(seq 65); do curl -s -o /dev/null -w '%{http_code}\n' https://lab-2026.duckdns.org/events; done | sort | uniq -c
+   ```
+
+   Expect about 60 answers of 200 and the rest 429. Then, within the same
+   minute, one request from a different network (for example a phone on mobile
+   data) must still answer 200. If it answers 429, every visitor shares one
+   bucket: the app sees Caddy's address, so do not give out the dashboard until
+   that is fixed.
 
 ### Updating
 
 ```bash
 cd /opt/webhook-hub && git pull --ff-only
-cd deploy/webhook-hub && sudo docker compose up -d --build
+cd deploy/webhook-hub
+sudo env SOURCE_REVISION="$(git rev-parse --short HEAD)" docker compose up -d --build
 ```
+
+### Rolling back
+
+Every build keeps its own tag, so the previous image is still there. List them
+with `sudo docker images webhook-hub`, then start the one you want, without
+`--build`:
+
+```bash
+sudo env SOURCE_REVISION=<previous-tag> docker compose up -d
+```
+
+To see which commit a running container was built from:
+`sudo docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' webhook-hub-webhook-hub-1`.
+
+Images pile up with every update; remove old ones with `sudo docker image rm
+webhook-hub:<old-tag>` once you no longer need them.
 
 ### Notes
 
@@ -201,8 +237,11 @@ cd deploy/webhook-hub && sudo docker compose up -d --build
   network with the password from `PGPASSWORD`, no published ports, the memory
   limit and restart policy, `/healthz` and `/events` through the proxy, and
   that 63 requests with 63 different spoofed `X-Forwarded-For` values hit the
-  limit (60 allowed, then 429) with no proxy warning in the log.
+  limit (60 allowed, then 429) with no proxy warning in the log. Also locally:
+  the image tag and the revision label follow `SOURCE_REVISION` (two builds
+  gave two tags with their own labels, and `unknown` without it).
 - Not verified: any of it on the VPS (the image build on arm64 with the VPS's
-  memory, and the `.env` commands above), the real Shopify signature header
-  against a Shopify store, and `TRUST_PROXY=1` behind the production Caddy
-  rather than a local one.
+  memory, the `.env` commands, `sudo env SOURCE_REVISION=...`, the rollback
+  and the real-address check in step 5 above), the real Shopify signature
+  header against a Shopify store, and `TRUST_PROXY=1` behind the production
+  Caddy rather than a local one.

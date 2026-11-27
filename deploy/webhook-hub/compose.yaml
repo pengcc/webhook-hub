@@ -20,7 +20,13 @@ services:
   webhook-hub:
     build:
       context: ../..
-    image: webhook-hub:local
+      args:
+        # Stored as the image's revision label.
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+    # One tag per revision, so the previous image stays available for a
+    # rollback. Always set SOURCE_REVISION when running compose here (see
+    # ../README.md); without it the tag is `unknown`.
+    image: webhook-hub:${SOURCE_REVISION:-unknown}
     restart: unless-stopped
     environment:
       # The password comes from PGPASSWORD (read by pg), so the URL stays free
