@@ -219,9 +219,14 @@ the worker, the read API) without a Shopify store. The secret stays on the VPS:
 it is read from `.env` and never printed. The data is synthetic. `--resolve`
 sends the request to Caddy on this machine, so it still goes through TLS and
 the proxy without the VPS having to reach its own public address. It leaves one
-test event in the database, which a dashboard will show; use a new
-`X-Shopify-Webhook-Id` for every new test, because a repeated one is stored
-only once.
+test event in the database, which a dashboard will show. The script makes a new
+`X-Shopify-Webhook-Id` for every run, because a repeated one is stored only
+once (step 2 below repeats it on purpose).
+
+The secret goes to `openssl` as an argument, so another local user could read
+it from the process list while the command runs. That is acceptable on this
+single-user VPS with the random test secret; once `.env` holds a real Shopify
+secret, do not copy this pattern onto a shared host.
 
 ```bash
 cd /opt/webhook-hub/deploy/webhook-hub
@@ -229,19 +234,22 @@ SECRET=$(grep '^SHOPIFY_WEBHOOK_SECRET=' .env | cut -d= -f2)
 BODY='{"id":1001,"note":"synthetic test order"}'
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -binary | base64)
 URL=https://lab-2026.duckdns.org/webhooks/shopify
-send() { curl -sS -m 15 --resolve lab-2026.duckdns.org:443:127.0.0.1 -w ' http=%{http_code}\n' -X POST "$URL" -H 'Content-Type: application/json' -H "X-Shopify-Hmac-Sha256: $1" -H 'X-Shopify-Topic: orders/create' -H 'X-Shopify-Webhook-Id: vps-test-001' -H 'X-Shopify-Shop-Domain: demo.myshopify.com' --data-binary "$BODY"; }
+ID=vps-test-$(date +%s)
+send() { curl -sS -m 15 --resolve lab-2026.duckdns.org:443:127.0.0.1 -w ' http=%{http_code}\n' -X POST "$URL" -H 'Content-Type: application/json' -H "X-Shopify-Hmac-Sha256: $1" -H 'X-Shopify-Topic: orders/create' -H "X-Shopify-Webhook-Id: $ID" -H 'X-Shopify-Shop-Domain: demo.myshopify.com' --data-binary "$BODY"; }
 echo "1 valid:";           send "$SIG"
 echo "2 same again:";      send "$SIG"
 echo "3 wrong signature:"; send "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 sleep 3
-echo "4 events:"; curl -sS -m 15 https://lab-2026.duckdns.org/events | cut -c1-400
+echo "4 events (newest first; this run's id is $ID):"; curl -sS -m 15 https://lab-2026.duckdns.org/events | cut -c1-400
 echo; echo "5 stats:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats
-unset SECRET SIG
+unset SECRET SIG ID
 ```
 
 Expected: `accepted` (200), `duplicate` (200), `invalid signature` (401, nothing
-stored), then one event with topic `orders/create` and status `done`, and
-`/stats` with `total` 1 and `done` 1.
+stored). Then the first item of `/events` has this run's id as `event_id`, topic
+`orders/create` and status `done` (give it a few seconds if it is still
+`pending`), and `/stats` shows `total` and `done` one higher than before the
+run. On an empty database that is 1 and 1.
 
 ### Updating
 
@@ -295,8 +303,9 @@ webhook-hub:<old-tag>` once you no longer need them.
   from outside with a valid certificate, and the log showed a client's real
   address behind the production Caddy (`TRUST_PROXY=1` works for IPv4). The
   test delivery gave `accepted`, `duplicate` and 401 for a wrong signature, and
-  the worker finished the event in under 100 ms. Step 3 failed once when it was
-  run outside this directory; it now starts with the `cd`.
+  the worker finished the event in under 100 ms. Step 3 failed once with `fatal:
+  not a git repository`, most likely because it ran outside the repository (not
+  confirmed); it now starts with the `cd`.
 - Not verified: the rollback and the image cleanup commands, IPv6 clients (the
   hostname has only an A record, and how Docker passes an IPv6 source address
   is untested), whether both containers come back after a reboot, memory use
