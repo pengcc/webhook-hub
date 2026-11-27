@@ -236,20 +236,21 @@ SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -binary | base6
 URL=https://lab-2026.duckdns.org/webhooks/shopify
 ID=vps-test-$(date +%s)
 send() { curl -sS -m 15 --resolve lab-2026.duckdns.org:443:127.0.0.1 -w ' http=%{http_code}\n' -X POST "$URL" -H 'Content-Type: application/json' -H "X-Shopify-Hmac-Sha256: $1" -H 'X-Shopify-Topic: orders/create' -H "X-Shopify-Webhook-Id: $ID" -H 'X-Shopify-Shop-Domain: demo.myshopify.com' --data-binary "$BODY"; }
+echo "0 stats before:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats; echo
 echo "1 valid:";           send "$SIG"
 echo "2 same again:";      send "$SIG"
 echo "3 wrong signature:"; send "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 sleep 3
 echo "4 events (newest first; this run's id is $ID):"; curl -sS -m 15 https://lab-2026.duckdns.org/events | cut -c1-400
-echo; echo "5 stats:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats
+echo; echo "5 stats after:"; curl -sS -m 15 https://lab-2026.duckdns.org/stats
 unset SECRET SIG ID
 ```
 
 Expected: `accepted` (200), `duplicate` (200), `invalid signature` (401, nothing
 stored). Then the first item of `/events` has this run's id as `event_id`, topic
 `orders/create` and status `done` (give it a few seconds if it is still
-`pending`), and `/stats` shows `total` and `done` one higher than before the
-run. On an empty database that is 1 and 1.
+`pending`), and `total` and `done` in step 5 are each one higher than in
+step 0.
 
 ### Updating
 
