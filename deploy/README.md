@@ -70,8 +70,8 @@ the name the Caddyfile forwards to).
    real passwords (`openssl rand -base64 24`) and restrict it with
    `chmod 600 .env`.
 3. Optional dry run of certificate issuance: set `ACME_CA` in `.env` to the
-   Let's Encrypt staging directory (append the line once: a duplicate is
-   harmless but untidy), start, check, then delete that line and run
+   Let's Encrypt staging directory (append the line once; how Compose
+   treats a duplicated key was not tested), start, check, then delete that line and run
    `sudo docker compose up -d` again, which recreates only Caddy. Staging
    certificates are not trusted by browsers.
 4. From `/opt/webhook-hub/deploy/infra`: `sudo docker compose up -d`.
@@ -141,10 +141,13 @@ sudo docker compose up -d
 - Verified locally on a throwaway stack: the network split, the init script and
   the add-a-database procedure (without `sudo`), and the Caddyfile default and
   override for `ACME_CA`.
-- Verified on the VPS (2026-11-27): the first-start steps above, including
+- Verified on the VPS (2026-11-27): steps 1 and 3 to 5 above, including
   `git clone`, the staging dry run, the switch to the production CA, a
   certificate for `lab-2026.duckdns.org` and the 502 and 308 answers from
-  outside, and the init script's output (role, database, `REVOKE`).
+  outside, and the init script's output (role, database, `REVOKE`). Step 2
+  was done differently: `.env` was written with `umask 077` and two
+  `openssl rand -hex 24` passwords. Passwords from `openssl rand -base64 24`
+  (step 2 as written) have not been tried on the VPS.
 - Not verified: the add-a-database procedure on the VPS (`sudo
   --preserve-env`), and the single-file bind mount behaviour after a
   `git pull`.
