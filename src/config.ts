@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+function isOrigin(value: string): boolean {
+  try {
+    return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+}
+
 const schema = z
   .object({
     DATABASE_URL: z.string().min(1),
@@ -19,6 +27,29 @@ const schema = z
     WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(12),
     WORKER_LOCK_TIMEOUT_SECONDS: z.coerce.number().int().min(10).default(300),
     WORKER_HANDLER_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(60),
+    // Browser origins allowed to call the read API (comma separated, e.g.
+    // https://example.pages.dev). Empty means no CORS headers are sent.
+    CORS_ALLOWED_ORIGINS: z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+      .refine((list) => list.every(isOrigin), {
+        message: 'must be origins like https://example.com, without a path',
+      }),
+    // Per client IP, read API only. Webhook deliveries are not rate limited.
+    RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(60),
+    RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
+    // Set to true only behind a reverse proxy (Caddy) that overwrites
+    // X-Forwarded-For; otherwise every client shares the proxy's address.
+    TRUST_PROXY: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
   })
   .superRefine((value, ctx) => {
     if (

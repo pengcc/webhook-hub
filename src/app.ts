@@ -1,3 +1,5 @@
+import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { Config } from './config.js';
@@ -8,7 +10,16 @@ const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 
 type AppDeps = {
   pool: Pool;
-  config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'>;
+  config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'> &
+    Partial<
+      Pick<
+        Config,
+        | 'CORS_ALLOWED_ORIGINS'
+        | 'RATE_LIMIT_MAX'
+        | 'RATE_LIMIT_WINDOW_SECONDS'
+        | 'TRUST_PROXY'
+      >
+    >;
   /** See registerReadApi. Tests set 0 to see fresh counts. */
   statsCacheMs?: number;
 };
@@ -24,6 +35,7 @@ export function buildApp({
 }: AppDeps): FastifyInstance {
   const app = Fastify({
     bodyLimit: MAX_BODY_BYTES,
+    trustProxy: config.TRUST_PROXY ?? false,
     logger: {
       level: config.LOG_LEVEL,
       // Never log signatures or payloads.
@@ -32,6 +44,16 @@ export function buildApp({
         'req.headers.authorization',
       ],
     },
+  });
+
+  // Browsers may call the read API only from the configured origins; with none
+  // configured no CORS headers are sent at all.
+  const corsOrigins = config.CORS_ALLOWED_ORIGINS ?? [];
+  app.register(cors, {
+    origin: corsOrigins.length > 0 ? corsOrigins : false,
+    methods: ['GET', 'HEAD', 'OPTIONS'],
+    exposedHeaders: ['retry-after'],
+    maxAge: 600,
   });
 
   // Signature verification needs the exact bytes that were sent.
@@ -118,7 +140,19 @@ export function buildApp({
       .send({ error: error instanceof Error ? error.message : 'bad request' });
   });
 
-  registerReadApi(app, pool, { statsCacheMs });
+  // Rate limiting is scoped to the read API: webhook deliveries come from the
+  // platform's shared addresses and are authenticated by signature instead.
+  // buildApp callers that omit RATE_LIMIT_MAX (tests) get no limiter.
+  app.register(async (scope) => {
+    const max = config.RATE_LIMIT_MAX;
+    if (max !== undefined) {
+      await scope.register(rateLimit, {
+        max,
+        timeWindow: (config.RATE_LIMIT_WINDOW_SECONDS ?? 60) * 1000,
+      });
+    }
+    registerReadApi(scope, pool, { statsCacheMs });
+  });
 
   return app;
 }
