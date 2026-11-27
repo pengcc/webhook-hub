@@ -1,0 +1,307 @@
+import type { FastifyInstance } from 'fastify';
+import type { Pool } from 'pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { buildApp } from '../src/app.js';
+import { createTestDb } from './helpers.js';
+
+let db: Awaited<ReturnType<typeof createTestDb>>;
+let app: FastifyInstance;
+
+beforeAll(async () => {
+  db = await createTestDb();
+  app = buildApp({
+    pool: db.pool,
+    config: { SHOPIFY_WEBHOOK_SECRET: 'unused', LOG_LEVEL: 'silent' },
+    statsCacheMs: 0,
+  });
+  await app.ready();
+});
+
+afterAll(async () => {
+  await app.close();
+  await db.drop();
+});
+
+beforeEach(async () => {
+  await db.pool.query('TRUNCATE events RESTART IDENTITY');
+});
+
+async function insert(
+  i: number,
+  overrides: { topic?: string; status?: string; payload?: unknown } = {}
+): Promise<string> {
+  const { rows } = await db.pool.query<{ id: string }>(
+    `INSERT INTO events (source, event_id, correlation_id, topic, shop, status, payload, last_error)
+     VALUES ('shopify', $1, $2, $3, 'demo.myshopify.com', $4, $5, $6)
+     RETURNING id`,
+    [
+      `wh-${i}`,
+      `ev-${i}`,
+      overrides.topic ?? 'orders/create',
+      overrides.status ?? 'done',
+      JSON.stringify(
+        overrides.payload ?? { id: i, email: 'secret@example.com' }
+      ),
+      overrides.status === 'dead' ? 'boom' : null,
+    ]
+  );
+  return rows[0]!.id;
+}
+
+describe('GET /events', () => {
+  it('lists newest first without exposing payloads', async () => {
+    await insert(1);
+    await insert(2);
+
+    const res = await app.inject({ method: 'GET', url: '/events' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items.map((e: { event_id: string }) => e.event_id)).toEqual([
+      'wh-2',
+      'wh-1',
+    ]);
+    expect(body.next_cursor).toBeNull();
+    expect(JSON.stringify(body)).not.toContain('secret@example.com');
+    expect(body.items[0]).not.toHaveProperty('payload');
+  });
+
+  it('pages with a cursor and returns each event exactly once', async () => {
+    for (let i = 1; i <= 5; i++) await insert(i);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const url: string = cursor
+        ? `/events?limit=2&cursor=${cursor}`
+        : '/events?limit=2';
+      const res = await app.inject({ method: 'GET', url });
+      const body = res.json<{
+        items: { event_id: string }[];
+        next_cursor: string | null;
+      }>();
+      seen.push(...body.items.map((e) => e.event_id));
+      cursor = body.next_cursor;
+    } while (cursor);
+
+    expect(seen).toEqual(['wh-5', 'wh-4', 'wh-3', 'wh-2', 'wh-1']);
+  });
+
+  it('filters by status and topic', async () => {
+    await insert(1, { status: 'dead' });
+    await insert(2, { status: 'done', topic: 'orders/updated' });
+    await insert(3, { status: 'dead', topic: 'orders/updated' });
+
+    const dead = (
+      await app.inject({ method: 'GET', url: '/events?status=dead' })
+    ).json();
+    expect(dead.items.map((e: { event_id: string }) => e.event_id)).toEqual([
+      'wh-3',
+      'wh-1',
+    ]);
+
+    const updated = (
+      await app.inject({
+        method: 'GET',
+        url: '/events?topic=orders/updated&status=dead',
+      })
+    ).json();
+    expect(updated.items).toHaveLength(1);
+    expect(updated.items[0].event_id).toBe('wh-3');
+    expect(updated.items[0].has_error).toBe(true);
+    expect(JSON.stringify(updated)).not.toContain('boom');
+  });
+
+  it('keeps the filter when paging with a cursor', async () => {
+    for (let i = 1; i <= 6; i++) {
+      await insert(i, { status: i % 2 === 0 ? 'dead' : 'done' });
+    }
+    const first = (
+      await app.inject({ method: 'GET', url: '/events?status=dead&limit=2' })
+    ).json();
+    expect(first.items.map((e: { event_id: string }) => e.event_id)).toEqual([
+      'wh-6',
+      'wh-4',
+    ]);
+    const second = (
+      await app.inject({
+        method: 'GET',
+        url: `/events?status=dead&limit=2&cursor=${first.next_cursor}`,
+      })
+    ).json();
+    expect(second.items.map((e: { event_id: string }) => e.event_id)).toEqual([
+      'wh-2',
+    ]);
+    expect(second.next_cursor).toBeNull();
+  });
+
+  it('accepts the maximum page size', async () => {
+    const res = await app.inject({ method: 'GET', url: '/events?limit=100' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects invalid query parameters', async () => {
+    for (const url of [
+      '/events?status=bogus',
+      '/events?limit=0',
+      '/events?limit=101',
+      '/events?cursor=abc',
+    ]) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode, url).toBe(400);
+    }
+  });
+});
+
+describe('GET /events/:id', () => {
+  it('returns one event without its payload', async () => {
+    const id = await insert(1, { status: 'dead' });
+    const res = await app.inject({ method: 'GET', url: `/events/${id}` });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({
+      id,
+      status: 'dead',
+      topic: 'orders/create',
+      event_id: 'wh-1',
+      has_error: true,
+    });
+    expect(body).not.toHaveProperty('payload');
+    expect(body).not.toHaveProperty('last_error');
+  });
+
+  it('returns 404 for unknown and malformed ids', async () => {
+    for (const url of ['/events/999999', '/events/abc', '/events/-1']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode, url).toBe(404);
+    }
+  });
+});
+
+describe('GET /stats', () => {
+  it('counts events per status, including zeros', async () => {
+    expect((await app.inject({ method: 'GET', url: '/stats' })).json()).toEqual(
+      {
+        total: 0,
+        by_status: { pending: 0, processing: 0, done: 0, failed: 0, dead: 0 },
+      }
+    );
+
+    await insert(1, { status: 'done' });
+    await insert(2, { status: 'done' });
+    await insert(3, { status: 'dead' });
+
+    expect((await app.inject({ method: 'GET', url: '/stats' })).json()).toEqual(
+      {
+        total: 3,
+        by_status: { pending: 0, processing: 0, done: 2, failed: 0, dead: 1 },
+      }
+    );
+  });
+});
+
+describe('stats cache', () => {
+  it('serves repeated requests from one query within the window', async () => {
+    const cached = buildApp({
+      pool: db.pool,
+      config: { SHOPIFY_WEBHOOK_SECRET: 'unused', LOG_LEVEL: 'silent' },
+      statsCacheMs: 60_000,
+    });
+    await cached.ready();
+    try {
+      await insert(1);
+      const first = (
+        await cached.inject({ method: 'GET', url: '/stats' })
+      ).json();
+      await insert(2);
+      const res = await cached.inject({ method: 'GET', url: '/stats' });
+
+      expect(first.total).toBe(1);
+      expect(res.json().total).toBe(1);
+      expect(res.headers['cache-control']).toBe('public, max-age=60');
+    } finally {
+      await cached.close();
+    }
+  });
+});
+
+describe('stats cache under failure and concurrency', () => {
+  const statsRows = { rows: [{ status: 'done', count: '2' }] };
+  const config = {
+    SHOPIFY_WEBHOOK_SECRET: 'unused',
+    LOG_LEVEL: 'silent',
+  } as const;
+
+  it('does not cache a failed load', async () => {
+    let calls = 0;
+    const flaky = {
+      query: () =>
+        ++calls === 1
+          ? Promise.reject(new Error('transient'))
+          : Promise.resolve(statsRows),
+    } as unknown as Pool;
+    const flakyApp = buildApp({ pool: flaky, config, statsCacheMs: 60_000 });
+    await flakyApp.ready();
+    try {
+      const failed = await flakyApp.inject({ method: 'GET', url: '/stats' });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.headers['cache-control']).toBe('no-store');
+
+      const ok = await flakyApp.inject({ method: 'GET', url: '/stats' });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().by_status.done).toBe(2);
+      expect(calls).toBe(2);
+    } finally {
+      await flakyApp.close();
+    }
+  });
+
+  it('shares one query between concurrent requests', async () => {
+    let calls = 0;
+    const slow = {
+      query: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 30));
+        return statsRows;
+      },
+    } as unknown as Pool;
+    const slowApp = buildApp({ pool: slow, config, statsCacheMs: 60_000 });
+    await slowApp.ready();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          slowApp.inject({ method: 'GET', url: '/stats' })
+        )
+      );
+      expect(results.every((r) => r.statusCode === 200)).toBe(true);
+      expect(calls).toBe(1);
+    } finally {
+      await slowApp.close();
+    }
+  });
+});
+
+describe('database failures', () => {
+  it('returns a generic 500 without internal error text', async () => {
+    const broken = buildApp({
+      pool: {
+        query: () =>
+          Promise.reject(new Error('connect ECONNREFUSED 10.9.8.7:5432')),
+      } as unknown as Pool,
+      config: { SHOPIFY_WEBHOOK_SECRET: 'unused', LOG_LEVEL: 'silent' },
+      statsCacheMs: 0,
+    });
+    await broken.ready();
+    try {
+      for (const url of ['/events', '/events/1', '/stats']) {
+        const res = await broken.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(500);
+        expect(res.body, url).not.toContain('10.9.8.7');
+        expect(res.headers['cache-control'], url).toBe('no-store');
+        expect(res.json()).toEqual({ error: 'internal error' });
+      }
+    } finally {
+      await broken.close();
+    }
+  });
+});

@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { Config } from './config.js';
+import { registerReadApi } from './read-api.js';
 import { verifyShopifyHmac } from './shopify.js';
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MiB
@@ -8,13 +9,19 @@ const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 type AppDeps = {
   pool: Pool;
   config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'>;
+  /** See registerReadApi. Tests set 0 to see fresh counts. */
+  statsCacheMs?: number;
 };
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function buildApp({ pool, config }: AppDeps): FastifyInstance {
+export function buildApp({
+  pool,
+  config,
+  statsCacheMs,
+}: AppDeps): FastifyInstance {
   const app = Fastify({
     bodyLimit: MAX_BODY_BYTES,
     logger: {
@@ -91,6 +98,27 @@ export function buildApp({ pool, config }: AppDeps): FastifyInstance {
       .code(200)
       .send({ status: duplicate ? 'duplicate' : 'accepted' });
   });
+
+  // Never send internal error text (database host, query details) to clients.
+  app.setErrorHandler((error, req, reply) => {
+    const status =
+      typeof (error as { statusCode?: unknown }).statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+    if (status >= 500) {
+      req.log.error({ err: error }, 'request failed');
+      // Headers set before the error was thrown survive; never let a proxy cache a 5xx.
+      return reply
+        .code(status)
+        .header('cache-control', 'no-store')
+        .send({ error: 'internal error' });
+    }
+    return reply
+      .code(status)
+      .send({ error: error instanceof Error ? error.message : 'bad request' });
+  });
+
+  registerReadApi(app, pool, { statsCacheMs });
 
   return app;
 }
