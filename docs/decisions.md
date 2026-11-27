@@ -12,7 +12,7 @@
 | 前端看板 | `pengcc/portfolio` 内的路由（如 `/demos/webhook-hub`），Cloudflare Pages，只调用只读 API，`VITE_API_BASE` 构建时注入 |
 | 降级 | API 不通时显示构建时生成的静态快照，并标注 live API 暂不可用 |
 | 后端部署 | Oracle VPS，Docker Compose（caddy / webhook-hub / postgres，均有 arm64 镜像） |
-| 反向代理 | Caddy，按子域名分发，HTTP-01 自动签证书，需放行 80/443（OCI Security List + 主机 iptables 都要改） |
+| 反向代理 | Caddy，HTTP-01 自动签证书，需放行 80/443（OCI Security List + 主机 iptables 都要改）；目前只服务一个主机名（`lab-2026.duckdns.org`）放在根路径，多个项目怎么共用同一个主机名见"待定" |
 | 主机名 | 先用 DuckDNS 子域名（暂时可用即可），已注册 `lab-2026.duckdns.org`；将来换域名只改 Caddy 主机名和 `VITE_API_BASE` |
 | 演示数据 | 先做模拟发送器（Shopify 格式，可制造错签名、重复、下游失败）；Shopify 开发商店是可选的锦上添花 |
 | 数据标注 | 看板用 `source` 区分 `synthetic` / `shopify-dev`，不接真实客户数据 |
