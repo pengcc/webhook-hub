@@ -1,4 +1,5 @@
 Read `~/Projects/agent-home/core.md` first (shared rules). Start sessions from this project directory.
+Small changes may skip its plan gate and full delivery flow; see `docs/decisions.md`.
 
 # AGENTS.md
 
