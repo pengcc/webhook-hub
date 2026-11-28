@@ -46,8 +46,10 @@ Requires Node 24 and pnpm 11 (see `mise.toml`, `packageManager`).
 - Demo data is synthetic or from a sandbox source (Shopify development store).
   Never ingest real customer data.
 - Ask the user before any outward-facing action: creating a repository,
-  pushing, opening or merging a PR, deploying, registering accounts, changing
-  DNS or firewall rules. Approval for one action does not extend to the next.
+  pushing, merging a PR, deploying, registering accounts, changing DNS or
+  firewall rules. Approval for one action does not extend to the next. Opening
+  a PR needs no separate approval (`.claude/settings.json` allows `gh pr create`);
+  every PR still gets a review, and merging is never silent.
 - The Oracle console is operated by the user. Give instructions; do not drive it.
 - Do not change global tooling (package managers, shell profiles, PATH, global
   Git config). If a tool is missing or at the wrong version, report it.
