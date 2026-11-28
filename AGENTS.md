@@ -49,7 +49,9 @@ Requires Node 24 and pnpm 11 (see `mise.toml`, `packageManager`).
   pushing, merging a PR, deploying, registering accounts, changing DNS or
   firewall rules. Approval for one action does not extend to the next. Opening
   a PR needs no separate approval (`.claude/settings.json` allows `gh pr create`);
-  every PR still gets a review, and merging is never silent.
+  every PR still gets a review, and merging is never silent. Pushing a
+  `feat/`, `fix/`, `chore/` or `docs/` branch is pre-allowed in settings once the
+  user has approved the push in chat; force pushes and pushes to `main` are denied.
 - The Oracle console is operated by the user. Give instructions; do not drive it.
 - Do not change global tooling (package managers, shell profiles, PATH, global
   Git config). If a tool is missing or at the wrong version, report it.
