@@ -58,6 +58,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Built at runtime so no credential-bearing URL literal sits in the source.
+function withUserinfo(base: string, password: string): string {
+  const url = new URL(base);
+  url.username = 'user';
+  url.password = password;
+  return url.href;
+}
+
 const options = (count = 1) => ({
   runId: 'testrun',
   count,
@@ -198,8 +206,55 @@ describe('main', () => {
     expect(await main(['--count', '0'])).toBe(2);
     expect(await main(['--url', 'ftp://example.com'])).toBe(2);
     expect(await main(['--url', 'not a url'])).toBe(2);
+    expect(await main(['--url', `${baseUrl}/webhooks/shopify`])).toBe(2);
     await expect(main(['--scenarios', 'nope'])).rejects.toThrow(
       'unknown scenario'
+    );
+  });
+
+  it('rejects credentials in --url without printing them', async () => {
+    const printed: string[] = [];
+    const capture = (...a: unknown[]) => {
+      printed.push(a.join(' '));
+    };
+    vi.spyOn(console, 'error').mockImplementation(capture);
+    vi.spyOn(console, 'log').mockImplementation(capture);
+    vi.stubEnv('SHOPIFY_WEBHOOK_SECRET', secret);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    expect(
+      await main([
+        '--url',
+        withUserinfo('http://127.0.0.1:1/x', 'url-pw-value'),
+      ])
+    ).toBe(2);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(printed.join('\n')).not.toContain('url-pw-value');
+  });
+
+  it('posts to the endpoint under a path prefix', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubEnv('SHOPIFY_WEBHOOK_SECRET', secret);
+    const requested: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      requested.push(String(input instanceof Request ? input.url : input));
+      return Response.json({ status: 'accepted' });
+    });
+    expect(
+      await main([
+        '--url',
+        'https://example.test/webhook-hub',
+        '--scenarios',
+        'valid',
+      ])
+    ).toBe(0);
+    expect(requested).toEqual([
+      'https://example.test/webhook-hub/webhooks/shopify',
+    ]);
+  });
+
+  it('webhookUrl never keeps credentials', () => {
+    expect(webhookUrl(withUserinfo('http://h/x', 'p')).href).toBe(
+      'http://h/x/webhooks/shopify'
     );
   });
 });

@@ -183,6 +183,9 @@ export function buildDeliveries(options: BuildOptions): Delivery[] {
  */
 export function webhookUrl(base: string | URL): URL {
   const url = new URL(base);
+  // fetch rejects URLs with credentials and echoes the URL in its error.
+  url.username = '';
+  url.password = '';
   url.search = '';
   url.hash = '';
   if (!url.pathname.endsWith('/')) url.pathname += '/';
@@ -245,7 +248,8 @@ function parseScenarios(value: string | undefined): Scenario[] {
 
 const USAGE = `Usage: SHOPIFY_WEBHOOK_SECRET=... pnpm simulate [options]
 
-  --url <base-url>      webhook-hub base URL, a path prefix is kept
+  --url <base-url>      webhook-hub base URL, not the endpoint: /webhooks/shopify
+                        is appended; a path prefix is kept
                         (default http://localhost:3000)
   --count <n>           deliveries per scenario (default 1, max 50)
   --scenarios <list>    comma-separated, default all: ${SCENARIOS.join(', ')}
@@ -292,6 +296,17 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     console.error('--url must be http or https');
+    return 2;
+  }
+  if (url.username || url.password) {
+    // Never echo the URL here: it would print the password.
+    console.error('--url must not contain a username or password');
+    return 2;
+  }
+  if (/\/webhooks\/shopify\/?$/.test(url.pathname)) {
+    console.error(
+      '--url is the base URL; leave out /webhooks/shopify (it is added)'
+    );
     return 2;
   }
 
