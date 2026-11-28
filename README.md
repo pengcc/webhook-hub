@@ -44,6 +44,22 @@ sandbox source such as a Shopify development store. No real customer data is
 ever ingested, and real secrets never enter this repository: `.env.example`
 lists placeholders only.
 
+The simulator (`pnpm simulate`) sends synthetic Shopify-shaped orders signed
+with the receiver's secret, read from `SHOPIFY_WEBHOOK_SECRET` in the
+environment (never as an argument, and never printed). Per scenario it sends
+valid orders, a delivery and its repeat (one stored row), a wrong signature
+(401, nothing stored), a signed payload without an order id (accepted, then
+dead-lettered by the worker) and a topic with no handler (accepted, then done).
+It exits 1 if any response differs from what is expected.
+
+```bash
+SHOPIFY_WEBHOOK_SECRET=dev-only-secret pnpm simulate --url http://localhost:3000 --count 3
+```
+
+Options: `--scenarios valid,duplicate,...`, `--shop`, `--help`. It cannot produce
+a retryable downstream failure yet, because the placeholder handlers never
+fail that way.
+
 ## Development
 
 Requires Node 24 and pnpm 11 (see `mise.toml`).
