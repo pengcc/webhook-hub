@@ -82,7 +82,7 @@
 - 迁来的 `repository-safety.yml` 只跑密钥扫描和 Biome，不跑类型检查、测试、构建，所以它的绿色对服务本身说明力很弱。已新增 `.github/workflows/ci.yml`：Postgres 17 服务容器，依次 `pnpm typecheck`、`pnpm test`（repo-tools 和服务两套）、`pnpm build`。收益是：在干净环境复现（`--frozen-lockfile`、全新数据库）、防止忘跑、让将来的必需检查有意义。局限：开发者本机已跑过同样的检查，CI 抓的是环境差异和遗漏，不是新类型的 bug。
 - 暂不加 Docker 构建：GitHub 默认运行器是 x86，部署目标是 ARM，构建通过不能证明目标环境没问题；等有自动部署再加（公开仓库可用免费 ARM 运行器，标签和限额未核实）。
 - 未迁移 badminton 的 Issue、Plan、Review、Merge 流程（`open-or-update-pr`、`merge-pr` 等）：对单人作品集过重。这是有意取舍，而不是遗漏。计划批准和 PR review 是否触发，由 `AGENTS.md` Project Profile 的 `workflow` 一行声明，这里不再重复。
-- 引用 agent-home（2026-11-27，PR #8）：`AGENTS.md` 现在引用 `~/Projects/agent-home/core.md` 并带 Project Profile，选用 `plan`、`execute-plan`、`implementation-review` 三个 skill（最初是 `code-review`，agent-home 改名后更新）。采用的是 `core.md` 的边界、授权（push、开 PR、合并、部署都要先问）和工作方式；它的 9 步交付流程里，计划批准和 PR review 是否触发由 Project Profile 的 `workflow` 一行声明，合并审批和授权清单不受其影响，上一条"对单人作品集过重"的取舍不变。没有采用 `open-or-update-pr`、`merge-pr`，也没有采用 agent-home 的 guard hook 和 settings 模板（本仓库自己的 `.claude/settings.json` 照旧，见上文 Tooling 迁移）。该路径只在本机存在，VPS、CI 和别人 clone 时指向空，这种情况下以 `AGENTS.md` 自身的规则为准。
+- 引用 agent-home（2026-11-27，PR #8）：`AGENTS.md` 现在引用 `~/Projects/agent-home/core.md` 并带 Project Profile，选用 `plan`、`execute-plan`、`implementation-review` 三个 skill（最初是 `code-review`，agent-home 改名后更新）。采用的是 `core.md` 的边界、授权（push、合并、部署都要先问；开 PR 不需要单独批准，见 Tooling 迁移）和工作方式；它的 9 步交付流程里，计划批准和 PR review 是否触发由 Project Profile 的 `workflow` 一行声明，合并审批和授权清单不受其影响，上一条"对单人作品集过重"的取舍不变。没有采用 `open-or-update-pr`、`merge-pr`，也没有采用 agent-home 的 guard hook 和 settings 模板（本仓库自己的 `.claude/settings.json` 照旧，见上文 Tooling 迁移）。该路径只在本机存在，VPS、CI 和别人 clone 时指向空，这种情况下以 `AGENTS.md` 自身的规则为准。
 - 密钥扫描：自带约 1670 行迁移来的代码；更通用的做法是 CI 里用 gitleaks。待定：保留还是替换。GitHub 自带的 Secret Scanning 和 push protection 已开启。
 
 ## 备选（未采用）
