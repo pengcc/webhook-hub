@@ -9,6 +9,22 @@ function isOrigin(value: string): boolean {
   }
 }
 
+/** postgres://user@host[:port]/db, without a password (that goes separately). */
+function isReadDatabaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === 'postgres:' || url.protocol === 'postgresql:') &&
+      url.hostname !== '' &&
+      url.username !== '' &&
+      url.password === '' &&
+      url.pathname.length > 1
+    );
+  } catch {
+    return false;
+  }
+}
+
 const PROXY_KEYWORDS = new Set(['loopback', 'linklocal', 'uniquelocal']);
 
 function isProxyEntry(entry: string): boolean {
@@ -47,6 +63,19 @@ function parseTrustProxy(value: string): boolean | number | string[] {
 const schema = z
   .object({
     DATABASE_URL: z.string().min(1),
+    // Read-only role for the read API (see deploy/README.md, "Read-only role").
+    // Both or neither; without them the read API uses the read-write pool.
+    READ_DATABASE_URL: z
+      .string()
+      .optional()
+      .transform((v) => (v ? v : undefined))
+      .refine((v) => v === undefined || isReadDatabaseUrl(v), {
+        message: 'must be postgres://user@host/db without a password',
+      }),
+    READ_DATABASE_PASSWORD: z
+      .string()
+      .optional()
+      .transform((v) => (v ? v : undefined)),
     SHOPIFY_WEBHOOK_SECRET: z.string().min(1),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     HOST: z.string().default('0.0.0.0'),
@@ -95,6 +124,20 @@ const schema = z
       .transform(parseTrustProxy),
   })
   .superRefine((value, ctx) => {
+    if (
+      (value.READ_DATABASE_URL === undefined) !==
+      (value.READ_DATABASE_PASSWORD === undefined)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [
+          value.READ_DATABASE_URL === undefined
+            ? 'READ_DATABASE_URL'
+            : 'READ_DATABASE_PASSWORD',
+        ],
+        message: 'set READ_DATABASE_URL and READ_DATABASE_PASSWORD together',
+      });
+    }
     if (
       value.WORKER_HANDLER_TIMEOUT_SECONDS >= value.WORKER_LOCK_TIMEOUT_SECONDS
     ) {
