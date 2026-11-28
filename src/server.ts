@@ -30,8 +30,6 @@ async function main() {
 
   const applied = await migrate(pool, migrationsDir);
   if (applied.length > 0) app.log.info({ applied }, 'migrations applied');
-  // After migrations, so the view exists.
-  if (readPool) await probeReadPool(readPool, app.log);
 
   const worker = config.WORKER_ENABLED
     ? startWorker({
@@ -60,6 +58,9 @@ async function main() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   await app.listen({ port: config.PORT, host: config.HOST });
+  // After migrations (the view exists) and after listen, without waiting: a
+  // slow or broken read role must not delay webhook ingestion or /healthz.
+  if (readPool) void probeReadPool(readPool, app.log);
 }
 
 main().catch((error) => {

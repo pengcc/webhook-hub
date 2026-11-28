@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import { parseReadDatabaseUrl } from './read-pool.js';
 
 function isOrigin(value: string): boolean {
   try {
@@ -9,17 +10,11 @@ function isOrigin(value: string): boolean {
   }
 }
 
-/** postgres://user@host[:port]/db, without a password (that goes separately). */
+/** Same parser as the read pool, so what passes here is what the pool gets. */
 function isReadDatabaseUrl(value: string): boolean {
   try {
-    const url = new URL(value);
-    return (
-      (url.protocol === 'postgres:' || url.protocol === 'postgresql:') &&
-      url.hostname !== '' &&
-      url.username !== '' &&
-      url.password === '' &&
-      url.pathname.length > 1
-    );
+    parseReadDatabaseUrl(value);
+    return true;
   } catch {
     return false;
   }

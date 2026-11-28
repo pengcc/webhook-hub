@@ -14,16 +14,59 @@ export function readPoolConfig(
   password: string,
   extra: Partial<PoolConfig> = {}
 ): PoolConfig {
-  const parsed = new URL(url);
-  return {
-    ...extra,
-    host: parsed.hostname,
-    port: parsed.port ? Number(parsed.port) : 5432,
-    user: decodeURIComponent(parsed.username),
-    database: decodeURIComponent(parsed.pathname.replace(/^\//, '')),
-    password,
-  };
+  return { ...extra, ...parseReadDatabaseUrl(url), password };
 }
+
+/**
+ * Strict parse of `postgres://user@host[:port]/database`. Config validation
+ * uses the same function, so a URL that passes validation is exactly what the
+ * pool gets. Anything this does not carry over is rejected rather than
+ * silently dropped: query parameters (sslmode=...), a fragment, a password,
+ * extra path segments, bad percent escapes, port 0. IPv6 brackets are removed.
+ * Errors never include the URL.
+ */
+export function parseReadDatabaseUrl(value: string): {
+  host: string;
+  port: number;
+  user: string;
+  database: string;
+} {
+  const invalid = (why: string) =>
+    new Error(`READ_DATABASE_URL is invalid: ${why}`);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw invalid('not a URL');
+  }
+  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
+    throw invalid('scheme must be postgres');
+  }
+  if (url.password !== '') throw invalid('must not contain a password');
+  if (url.search !== '' || url.hash !== '') {
+    throw invalid('query parameters and fragments are not supported');
+  }
+  const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
+  const path = url.pathname.replace(/^\//, '');
+  if (host === '') throw invalid('missing host');
+  if (path === '' || path.includes('/')) {
+    throw invalid('path must be a single database name');
+  }
+  const port = url.port === '' ? 5432 : Number(url.port);
+  if (port < 1) throw invalid('bad port');
+  let user: string;
+  let database: string;
+  try {
+    user = decodeURIComponent(url.username);
+    database = decodeURIComponent(path);
+  } catch {
+    throw invalid('bad percent escape');
+  }
+  if (user === '') throw invalid('missing user');
+  return { host, port, user, database };
+}
+
+export const READ_POOL_CONNECT_TIMEOUT_MS = 5000;
 
 export function createReadPool(config: {
   READ_DATABASE_URL?: string;
@@ -35,6 +78,8 @@ export function createReadPool(config: {
   return new pg.Pool({
     ...readPoolConfig(config.READ_DATABASE_URL, config.READ_DATABASE_PASSWORD),
     max: 5,
+    // pg waits forever by default; fail a read request instead of hanging.
+    connectionTimeoutMillis: READ_POOL_CONNECT_TIMEOUT_MS,
   });
 }
 
@@ -56,9 +101,10 @@ export function warnIfNoReadPool(
 
 /**
  * Checks once that the read-only role can read the view. A wrong password, a
- * missing role or a missing grant would otherwise only show as 500s on the
- * read API, because /healthz uses the main pool. It logs instead of failing
- * startup: webhook ingestion matters more than the dashboard.
+ * missing role or a missing grant (CONNECT on the database, SELECT on the view)
+ * would otherwise only show as 500s on the read API, because /healthz uses the
+ * main pool. It logs instead of failing startup, and the server runs it after
+ * listen() without waiting: webhook ingestion matters more than the dashboard.
  */
 export async function probeReadPool(
   readPool: Pool,

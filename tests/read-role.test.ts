@@ -12,7 +12,9 @@ import {
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import {
+  createReadPool,
   probeReadPool,
+  READ_POOL_CONNECT_TIMEOUT_MS,
   readPoolConfig,
   warnIfNoReadPool,
 } from '../src/read-pool.js';
@@ -154,6 +156,23 @@ describe('read pool connection settings', () => {
     expect(readPoolConfig('postgres://reader@db/app_db', 'pw-value').port).toBe(
       5432
     );
+    expect(
+      readPoolConfig('postgres://reader@[::1]:5432/app_db', 'pw-value').host
+    ).toBe('::1');
+    expect(
+      readPoolConfig('postgres://read%40er@db/app%20db', 'pw-value')
+    ).toMatchObject({ user: 'read@er', database: 'app db' });
+  });
+
+  it('sets a connection timeout so a blackholed host cannot hang requests', async () => {
+    const pool = createReadPool({
+      READ_DATABASE_URL: 'postgres://reader@db/app_db',
+      READ_DATABASE_PASSWORD: 'pw-value',
+    });
+    expect(pool?.options.connectionTimeoutMillis).toBe(
+      READ_POOL_CONNECT_TIMEOUT_MS
+    );
+    await pool?.end();
   });
 });
 
@@ -223,6 +242,12 @@ describe('READ_* configuration', () => {
       'postgres://db/webhook_hub',
       'postgres://webhook_hub_read@db',
       'not a url',
+      // Parts the pool would drop or mishandle are rejected, not ignored.
+      `${readUrl}?sslmode=require`,
+      `${readUrl}#frag`,
+      'postgres://webhook_hub_read@db/webhook%zz',
+      'postgres://webhook_hub_read@db/webhook_hub/extra',
+      'postgres://webhook_hub_read@db:0/webhook_hub',
     ]) {
       expect(() =>
         loadConfig({
