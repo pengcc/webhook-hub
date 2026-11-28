@@ -56,7 +56,10 @@ It exits 1 if any response differs from what is expected.
 SHOPIFY_WEBHOOK_SECRET=dev-only-secret pnpm simulate --url http://localhost:3000 --count 3
 ```
 
-Options: `--scenarios valid,duplicate,...`, `--shop`, `--help`. It cannot produce
+Options: `--scenarios valid,duplicate,...`, `--shop`, `--help`. A path in
+`--url` is kept, so a prefix such as `https://host/webhook-hub` works. It runs
+from a development checkout (it needs the dev dependency `tsx`), not inside the
+production image, and is pointed at a URL. It cannot produce
 a retryable downstream failure yet, because the placeholder handlers never
 fail that way.
 

@@ -16,8 +16,10 @@ import { runOnce } from '../src/worker.js';
 import {
   buildDeliveries,
   main,
+  orderIdBase,
   SCENARIOS,
   sendDelivery,
+  webhookUrl,
 } from '../scripts/simulate.js';
 import { createTestDb } from './helpers.js';
 
@@ -74,9 +76,40 @@ describe('buildDeliveries', () => {
     expect(ids.every((id) => id?.startsWith('sim-testrun-'))).toBe(true);
   });
 
+  it('gives orders ids that differ between runs and stay safe integers', () => {
+    const orderIds = (runId: string) =>
+      buildDeliveries({ ...options(2), runId })
+        .filter((d) => !d.label.includes('(repeat)'))
+        .map((d) => (JSON.parse(d.body) as { id?: number }).id)
+        .filter((id): id is number => id !== undefined);
+    const a = orderIds('run-a');
+    const b = orderIds('run-b');
+    expect(new Set(a).size).toBe(a.length);
+    expect(a.filter((id) => b.includes(id))).toEqual([]);
+    expect([...a, ...b].every(Number.isSafeInteger)).toBe(true);
+    expect(orderIdBase('x')).toBe(orderIdBase('x'));
+  });
+
   it('keeps the secret out of every delivery', () => {
     const text = JSON.stringify(buildDeliveries(options()));
     expect(text).not.toContain(secret);
+  });
+});
+
+describe('webhookUrl', () => {
+  it('keeps a path prefix and drops query and fragment', () => {
+    expect(webhookUrl('http://h:3000').href).toBe(
+      'http://h:3000/webhooks/shopify'
+    );
+    expect(webhookUrl('http://h:3000/').href).toBe(
+      'http://h:3000/webhooks/shopify'
+    );
+    expect(webhookUrl('https://h/webhook-hub').href).toBe(
+      'https://h/webhook-hub/webhooks/shopify'
+    );
+    expect(webhookUrl('https://h/webhook-hub/?a=1#x').href).toBe(
+      'https://h/webhook-hub/webhooks/shopify'
+    );
   });
 });
 
@@ -164,6 +197,7 @@ describe('main', () => {
     vi.stubEnv('SHOPIFY_WEBHOOK_SECRET', secret);
     expect(await main(['--count', '0'])).toBe(2);
     expect(await main(['--url', 'ftp://example.com'])).toBe(2);
+    expect(await main(['--url', 'not a url'])).toBe(2);
     await expect(main(['--scenarios', 'nope'])).rejects.toThrow(
       'unknown scenario'
     );
