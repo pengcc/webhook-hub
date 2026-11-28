@@ -13,6 +13,8 @@ const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 
 type AppDeps = {
   pool: Pool;
+  /** Pool for the read API (read-only role). Defaults to `pool`. */
+  readPool?: Pool;
   config: Pick<Config, 'SHOPIFY_WEBHOOK_SECRET' | 'LOG_LEVEL'> &
     Partial<
       Pick<
@@ -40,6 +42,7 @@ function header(value: string | string[] | undefined): string | undefined {
 
 export function buildApp({
   pool,
+  readPool,
   config,
   statsCacheMs,
 }: AppDeps): FastifyInstance {
@@ -176,7 +179,7 @@ export function buildApp({
         timeWindow: (config.RATE_LIMIT_WINDOW_SECONDS ?? 60) * 1000,
       });
     }
-    registerReadApi(scope, pool, { statsCacheMs });
+    registerReadApi(scope, readPool ?? pool, { statsCacheMs });
   });
 
   return app;

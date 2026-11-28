@@ -1,9 +1,20 @@
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import { parseReadDatabaseUrl } from './read-pool.js';
 
 function isOrigin(value: string): boolean {
   try {
     return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+}
+
+/** Same parser as the read pool, so what passes here is what the pool gets. */
+function isReadDatabaseUrl(value: string): boolean {
+  try {
+    parseReadDatabaseUrl(value);
+    return true;
   } catch {
     return false;
   }
@@ -47,6 +58,19 @@ function parseTrustProxy(value: string): boolean | number | string[] {
 const schema = z
   .object({
     DATABASE_URL: z.string().min(1),
+    // Read-only role for the read API (see deploy/README.md, "Read-only role").
+    // Both or neither; without them the read API uses the read-write pool.
+    READ_DATABASE_URL: z
+      .string()
+      .optional()
+      .transform((v) => (v ? v : undefined))
+      .refine((v) => v === undefined || isReadDatabaseUrl(v), {
+        message: 'must be postgres://user@host/db without a password',
+      }),
+    READ_DATABASE_PASSWORD: z
+      .string()
+      .optional()
+      .transform((v) => (v ? v : undefined)),
     SHOPIFY_WEBHOOK_SECRET: z.string().min(1),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     HOST: z.string().default('0.0.0.0'),
@@ -95,6 +119,20 @@ const schema = z
       .transform(parseTrustProxy),
   })
   .superRefine((value, ctx) => {
+    if (
+      (value.READ_DATABASE_URL === undefined) !==
+      (value.READ_DATABASE_PASSWORD === undefined)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [
+          value.READ_DATABASE_URL === undefined
+            ? 'READ_DATABASE_URL'
+            : 'READ_DATABASE_PASSWORD',
+        ],
+        message: 'set READ_DATABASE_URL and READ_DATABASE_PASSWORD together',
+      });
+    }
     if (
       value.WORKER_HANDLER_TIMEOUT_SECONDS >= value.WORKER_LOCK_TIMEOUT_SECONDS
     ) {

@@ -27,9 +27,10 @@ const idParam = z.object({
   id: z.string().regex(/^\d{1,18}$/),
 });
 
+// Reads go through the events_public view (migration 003), which leaves out
+// the payload and the raw error text; the read-only role can see nothing else.
 const EVENT_COLUMNS = `id, source, event_id, correlation_id, topic, shop, status,
-  attempts, received_at, next_attempt_at, processed_at,
-  (last_error IS NOT NULL) AS has_error`;
+  attempts, received_at, next_attempt_at, processed_at, has_error`;
 
 type EventRow = {
   id: string;
@@ -55,7 +56,7 @@ type Stats = { total: number; by_status: Record<Status, number> };
 
 async function loadStats(pool: Pool): Promise<Stats> {
   const { rows } = await pool.query<{ status: string; count: string }>(
-    'SELECT status, count(*) AS count FROM events GROUP BY status'
+    'SELECT status, count(*) AS count FROM events_public GROUP BY status'
   );
   const byStatus: Record<Status, number> = {
     pending: 0,
@@ -107,7 +108,7 @@ export function registerReadApi(
     // Keyset pagination on id: stable while new events arrive.
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
     const { rows } = await pool.query<EventRow>(
-      `SELECT ${EVENT_COLUMNS} FROM events ${whereSql}
+      `SELECT ${EVENT_COLUMNS} FROM events_public ${whereSql}
         ORDER BY id DESC
         LIMIT $${params.length}`,
       params
@@ -128,7 +129,7 @@ export function registerReadApi(
       return reply.code(404).send({ error: 'not found' });
     }
     const { rows } = await pool.query<EventRow>(
-      `SELECT ${EVENT_COLUMNS} FROM events WHERE id = $1`,
+      `SELECT ${EVENT_COLUMNS} FROM events_public WHERE id = $1`,
       [parsed.data.id]
     );
     const row = rows[0];
