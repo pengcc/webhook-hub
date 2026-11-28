@@ -16,8 +16,10 @@ import { runOnce } from '../src/worker.js';
 import {
   buildDeliveries,
   main,
+  orderIdBase,
   SCENARIOS,
   sendDelivery,
+  webhookUrl,
 } from '../scripts/simulate.js';
 import { createTestDb } from './helpers.js';
 
@@ -56,6 +58,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Built at runtime so no credential-bearing URL literal sits in the source.
+function withUserinfo(base: string, password: string): string {
+  const url = new URL(base);
+  url.username = 'user';
+  url.password = password;
+  return url.href;
+}
+
 const options = (count = 1) => ({
   runId: 'testrun',
   count,
@@ -74,9 +84,40 @@ describe('buildDeliveries', () => {
     expect(ids.every((id) => id?.startsWith('sim-testrun-'))).toBe(true);
   });
 
+  it('gives orders ids that differ between runs and stay safe integers', () => {
+    const orderIds = (runId: string) =>
+      buildDeliveries({ ...options(2), runId })
+        .filter((d) => !d.label.includes('(repeat)'))
+        .map((d) => (JSON.parse(d.body) as { id?: number }).id)
+        .filter((id): id is number => id !== undefined);
+    const a = orderIds('run-a');
+    const b = orderIds('run-b');
+    expect(new Set(a).size).toBe(a.length);
+    expect(a.filter((id) => b.includes(id))).toEqual([]);
+    expect([...a, ...b].every(Number.isSafeInteger)).toBe(true);
+    expect(orderIdBase('x')).toBe(orderIdBase('x'));
+  });
+
   it('keeps the secret out of every delivery', () => {
     const text = JSON.stringify(buildDeliveries(options()));
     expect(text).not.toContain(secret);
+  });
+});
+
+describe('webhookUrl', () => {
+  it('keeps a path prefix and drops query and fragment', () => {
+    expect(webhookUrl('http://h:3000').href).toBe(
+      'http://h:3000/webhooks/shopify'
+    );
+    expect(webhookUrl('http://h:3000/').href).toBe(
+      'http://h:3000/webhooks/shopify'
+    );
+    expect(webhookUrl('https://h/webhook-hub').href).toBe(
+      'https://h/webhook-hub/webhooks/shopify'
+    );
+    expect(webhookUrl('https://h/webhook-hub/?a=1#x').href).toBe(
+      'https://h/webhook-hub/webhooks/shopify'
+    );
   });
 });
 
@@ -164,8 +205,56 @@ describe('main', () => {
     vi.stubEnv('SHOPIFY_WEBHOOK_SECRET', secret);
     expect(await main(['--count', '0'])).toBe(2);
     expect(await main(['--url', 'ftp://example.com'])).toBe(2);
+    expect(await main(['--url', 'not a url'])).toBe(2);
+    expect(await main(['--url', `${baseUrl}/webhooks/shopify`])).toBe(2);
     await expect(main(['--scenarios', 'nope'])).rejects.toThrow(
       'unknown scenario'
+    );
+  });
+
+  it('rejects credentials in --url without printing them', async () => {
+    const printed: string[] = [];
+    const capture = (...a: unknown[]) => {
+      printed.push(a.join(' '));
+    };
+    vi.spyOn(console, 'error').mockImplementation(capture);
+    vi.spyOn(console, 'log').mockImplementation(capture);
+    vi.stubEnv('SHOPIFY_WEBHOOK_SECRET', secret);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    expect(
+      await main([
+        '--url',
+        withUserinfo('http://127.0.0.1:1/x', 'url-pw-value'),
+      ])
+    ).toBe(2);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(printed.join('\n')).not.toContain('url-pw-value');
+  });
+
+  it('posts to the endpoint under a path prefix', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubEnv('SHOPIFY_WEBHOOK_SECRET', secret);
+    const requested: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      requested.push(String(input instanceof Request ? input.url : input));
+      return Response.json({ status: 'accepted' });
+    });
+    expect(
+      await main([
+        '--url',
+        'https://example.test/webhook-hub',
+        '--scenarios',
+        'valid',
+      ])
+    ).toBe(0);
+    expect(requested).toEqual([
+      'https://example.test/webhook-hub/webhooks/shopify',
+    ]);
+  });
+
+  it('webhookUrl never keeps credentials', () => {
+    expect(webhookUrl(withUserinfo('http://h/x', 'p')).href).toBe(
+      'http://h/x/webhooks/shopify'
     );
   });
 });

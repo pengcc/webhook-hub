@@ -7,7 +7,7 @@
  * The secret is read from the environment only and is never printed. All data
  * is synthetic; nothing here resembles a real customer.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { signShopifyBody } from '../src/shopify.js';
@@ -47,9 +47,19 @@ export type BuildOptions = {
   shop: string;
 };
 
-function orderBody(seq: number): string {
+/**
+ * Numeric id base for this run, so simulated order ids do not repeat across
+ * runs (a later projection keyed on the order id would otherwise collide).
+ * Below 2^53: at most 999_999_999 * 1000 + 999.
+ */
+export function orderIdBase(runId: string): number {
+  const digest = createHash('sha256').update(runId).digest();
+  return (digest.readUInt32BE(0) % 1_000_000_000) * 1000;
+}
+
+function orderBody(id: number, seq: number): string {
   return JSON.stringify({
-    id: 5_000_000 + seq,
+    id,
     name: `#SIM${1000 + seq}`,
     currency: 'EUR',
     total_price: (10 + seq * 3.5).toFixed(2),
@@ -63,6 +73,7 @@ function orderBody(seq: number): string {
 export function buildDeliveries(options: BuildOptions): Delivery[] {
   const { runId, count, secret, scenarios, shop } = options;
   const deliveries: Delivery[] = [];
+  const idBase = orderIdBase(runId);
   let seq = 0;
 
   const make = (
@@ -104,14 +115,14 @@ export function buildDeliveries(options: BuildOptions): Delivery[] {
           deliveries.push(
             make(scenario, n, {
               topic: n % 2 === 0 ? 'orders/updated' : 'orders/create',
-              body: orderBody(seq),
+              body: orderBody(idBase + seq, seq),
               expectedStatus: 200,
               expectedResult: 'accepted',
             })
           );
           break;
         case 'duplicate': {
-          const body = orderBody(seq);
+          const body = orderBody(idBase + seq, seq);
           const first = make(scenario, n, {
             topic: 'orders/create',
             body,
@@ -131,7 +142,7 @@ export function buildDeliveries(options: BuildOptions): Delivery[] {
           deliveries.push(
             make(scenario, n, {
               topic: 'orders/create',
-              body: orderBody(seq),
+              body: orderBody(idBase + seq, seq),
               signWith: `${secret}-wrong`,
               expectedStatus: 401,
             })
@@ -153,7 +164,7 @@ export function buildDeliveries(options: BuildOptions): Delivery[] {
           deliveries.push(
             make(scenario, n, {
               topic: 'customers/create',
-              body: JSON.stringify({ id: 7_000_000 + seq, note: 'synthetic' }),
+              body: JSON.stringify({ id: idBase + seq, note: 'synthetic' }),
               expectedStatus: 200,
               expectedResult: 'accepted',
             })
@@ -165,13 +176,29 @@ export function buildDeliveries(options: BuildOptions): Delivery[] {
   return deliveries;
 }
 
+/**
+ * The webhook endpoint under `base`, keeping any path prefix
+ * (`https://host/webhook-hub` -> `https://host/webhook-hub/webhooks/shopify`).
+ * Query and fragment are dropped.
+ */
+export function webhookUrl(base: string | URL): URL {
+  const url = new URL(base);
+  // fetch rejects URLs with credentials and echoes the URL in its error.
+  url.username = '';
+  url.password = '';
+  url.search = '';
+  url.hash = '';
+  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  return new URL('webhooks/shopify', url);
+}
+
 export async function sendDelivery(
-  baseUrl: string,
+  baseUrl: string | URL,
   delivery: Delivery,
   timeoutMs = 15_000
 ): Promise<Outcome> {
   try {
-    const res = await fetch(new URL('/webhooks/shopify', baseUrl), {
+    const res = await fetch(webhookUrl(baseUrl), {
       method: 'POST',
       headers: delivery.headers,
       body: delivery.body,
@@ -221,7 +248,9 @@ function parseScenarios(value: string | undefined): Scenario[] {
 
 const USAGE = `Usage: SHOPIFY_WEBHOOK_SECRET=... pnpm simulate [options]
 
-  --url <base-url>      webhook-hub base URL (default http://localhost:3000)
+  --url <base-url>      webhook-hub base URL, not the endpoint: /webhooks/shopify
+                        is appended; a path prefix is kept
+                        (default http://localhost:3000)
   --count <n>           deliveries per scenario (default 1, max 50)
   --scenarios <list>    comma-separated, default all: ${SCENARIOS.join(', ')}
   --shop <domain>       shop domain header (default demo.myshopify.com)
@@ -258,9 +287,26 @@ export async function main(argv: string[]): Promise<number> {
     console.error('--count must be an integer from 1 to 50');
     return 2;
   }
-  const url = new URL(values.url ?? '');
+  let url: URL;
+  try {
+    url = new URL(values.url ?? '');
+  } catch {
+    console.error('--url is not a valid URL');
+    return 2;
+  }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     console.error('--url must be http or https');
+    return 2;
+  }
+  if (url.username || url.password) {
+    // Never echo the URL here: it would print the password.
+    console.error('--url must not contain a username or password');
+    return 2;
+  }
+  if (/\/webhooks\/shopify\/?$/.test(url.pathname)) {
+    console.error(
+      '--url is the base URL; leave out /webhooks/shopify (it is added)'
+    );
     return 2;
   }
 
@@ -274,7 +320,7 @@ export async function main(argv: string[]): Promise<number> {
 
   let failed = 0;
   for (const delivery of deliveries) {
-    const outcome = await sendDelivery(url.origin, delivery);
+    const outcome = await sendDelivery(url, delivery);
     if (!outcome.ok) failed += 1;
     const got = outcome.error
       ? `error: ${outcome.error}`
