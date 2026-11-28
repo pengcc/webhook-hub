@@ -50,7 +50,7 @@
 
 来源：`badminton-club-app` commit `0849b529`（2026-11-05），拷贝后在本仓库维护，不做同步。`agent-project-foundation-kit` 已弃用，不作为来源。
 
-- 已迁移：`.repo-tools/scripts/` 下的 safety-guard（密钥扫描）及其依赖和测试、`.github/workflows/repository-safety.yml`、`biome.json`（去掉 Next/Tailwind 相关项）、`mise.toml`（Node 24、pnpm 11.26.0）、`.claude/settings.json`（最初照搬 badminton 的 deny `gh pr create/merge`，后改为：`gh pr create` 允许；`gh pr merge`、`git push`、`gh repo create` 每次询问；GitHub MCP 的 PR 创建和合并工具与自动合并开关仍禁止。原因：badminton 的 deny 配套有自己的发布脚本，这里没有，deny 只会挡住唯一的路径）、精简版 `AGENTS.md` / `CLAUDE.md`。
+- 已迁移：`.repo-tools/scripts/` 下的 safety-guard（密钥扫描）及其依赖和测试、`.github/workflows/repository-safety.yml`、`biome.json`（去掉 Next/Tailwind 相关项）、`mise.toml`（Node 24、pnpm 11.26.0）、`.claude/settings.json`（最初照搬 badminton 的 deny `gh pr create/merge`，后改为：`gh pr create` 允许；`gh pr merge`、`git push`、`gh repo create` 每次询问；GitHub MCP 的 PR 创建和合并工具与自动合并开关仍禁止。2026-11-28：`AGENTS.md` Boundaries 去掉了「开 PR 前先问」，与这里的 `gh pr create` 允许对齐，并与 agent-home `core.md` 一致（push 和合并要批准，开 PR 不需要单独批准）；每个 PR 仍要 review，合并不静默。原因：badminton 的 deny 配套有自己的发布脚本，这里没有，deny 只会挡住唯一的路径）、精简版 `AGENTS.md` / `CLAUDE.md`。
 - 已验证：`pnpm check` 通过；`pnpm test` 27 项通过。
 - 部分验证：仓库已于 2026-11-15 创建（`pengcc/webhook-hub`，公开，MIT）并推送 `main`。`pnpm safety:guard` 在 `main` 上扫描 0 个文件；在 `feat/service-skeleton` 上第一次真实扫描（22 个文件）就拦下了 README、`compose.yaml`、测试辅助文件里带密码的数据库 URL（`credential-bearing-url`，均为本地开发的一次性值，但扫描器不区分，且该规则不识别 URL 里的占位符）。处理方式：不放宽扫描器，改为 URL 不含凭据、密码走 `PGPASSWORD`（`pg` 会读取它），修改后扫描通过。两个 CI 工作流已在 PR #1 上于 GitHub 的 Ubuntu 运行并通过（`Baseline quality`、`Typecheck, test, build`，经 API 读回均为 success）。
 - `Dockerfile` 已在骨架里写好（多阶段、pnpm 缓存挂载、仅生产依赖、非 root `node` 用户、HEALTHCHECK），见下一节验证结果。
